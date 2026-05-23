@@ -102,7 +102,6 @@ def llamada_clasificador(file_ids: list) -> dict:
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": content}],
-        max_completion_tokens=800
     )
 
     texto = response.choices[0].message.content.strip()
@@ -174,7 +173,6 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": content}],
-        max_completion_tokens=4000
     )
 
     return response.choices[0].message.content
