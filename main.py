@@ -1,197 +1,59 @@
 """
-MICROSERVICIO JURÍDICO
-Recibe PDFs desde Make, los sube a OpenAI, y devuelve análisis jurídico.
+MICROSERVICIO JURÍDICO v2.0
+Arquitectura de doble llamada: Clasificador → Analizador especializado
+Acumulación de PDFs por message_id para recibir múltiples archivos del mismo correo.
 """
 
+import os
+import time
+import threading
+import json
 from flask import Flask, request, jsonify
 import openai
-import os
-import base64
-import time
-import re
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
-def load_env(path=".env"):
-    if not os.path.exists(path):
-        return
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key and value and key not in os.environ:
-                os.environ[key] = value
-
-
-load_env()
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-API_SECRET     = os.environ.get("API_SECRET", "clave_secreta_make")  # para proteger el endpoint
+API_SECRET     = os.environ.get("API_SECRET", "clave_secreta_make")
 MODEL          = "gpt-5.4-mini-2026-03-17"
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# ── Prompt jurídico completo ───────────────────────────────────
-PROMPT_JURIDICO = """Actúa como abogado experto en derecho administrativo educativo, carrera docente, planta de personal docente y control de legalidad de actos administrativos expedidos por una Secretaría de Educación certificada en Colombia.
+# ── Acumulador de PDFs por correo ──────────────────────────────
+# Estructura: { message_id: { "archivos": [...], "timestamp": float } }
+pendientes = {}
+lock_pendientes = threading.Lock()
+TTL_SEGUNDOS = 300  # 5 minutos máximo de espera por correo
 
-Voy a adjuntarte un proyecto de acto administrativo mediante el cual se pretende realizar una reubicación de un docente por necesidad del servicio. El acto puede referirse a:
-Reubicación de cargo docente, por ejemplo, de docente de aula a docente orientador, o viceversa.
-Reubicación por perfil, área, asignación académica o necesidad del servicio, por ejemplo, de docente de aula primaria a docente de aula matemáticas, ciencias naturales, inglés u otra área.
-También puedo adjuntar soportes como formato único de novedades, solicitud del docente, hoja de vida, títulos académicos, certificado de planta, necesidad del servicio, concepto del rector o de Gestión Administrativa Docente.
-Tu tarea es revisar si el acto administrativo está bien proyectado, si la figura jurídica utilizada corresponde al caso concreto y si la reubicación se encuentra debidamente soportada.
+# ── Mapa de tipos a archivos de prompt ────────────────────────
+MAPA_PROMPTS = {
+    "RESOLUCION":    "resolucion",
+    "TUTELA":        "tutela",
+    "PETICION":      "peticion",
+    "REQUERIMIENTO": "requerimiento",
+    "OFICIO":        "oficio",
+    "OTRO":          "general",
+}
 
-1. Identificación inicial del acto
-Primero identifica:
-Tipo de acto administrativo.
-Nombre del docente.
-Cargo actual.
-Perfil, área o cargo actual.
-Institución educativa actual.
-Cargo, perfil o área al que se pretende reubicar.
-Institución educativa de destino, si cambia.
-Si el acto corresponde realmente a una reubicación de cargo o a una reubicación/cambio de perfil dentro del mismo cargo docente.
-Si el acto se fundamenta en solicitud del docente, necesidad del servicio, decisión administrativa o una combinación de estas.
-
-2. Revisión de competencia
-Verifica si la autoridad que firma el acto tiene competencia para expedirlo.
-Analiza especialmente:
-Ley 115 de 1994, artículo 153.
-Ley 715 de 2001, artículo 7, especialmente numeral 7.3.
-Decreto 1075 de 2015, normas sobre planta, cargos docentes y manual de funciones.
-Decreto Distrital 0208 de 2016, si aplica.
-Decreto Distrital 0090 de 2026, si aplica.
-Cualquier acto de delegación, reasunción o distribución de funciones entre Alcalde y Secretaría de Educación.
-Determina si el acto puede ser firmado por la Secretaría de Educación o si, por su naturaleza, podría requerir firma del Alcalde como autoridad nominadora.
-Distingue si se trata de una decisión propia de administración del servicio educativo, una modificación de asignación o perfil, o una actuación que compromete directamente la función nominadora.
-
-3. Revisión de la figura jurídica usada
-Analiza si la figura utilizada en el título y en la parte motiva corresponde al caso concreto.
-Diferencia claramente:
-Reubicación de cargo docente:
-Cuando el docente pasa de un cargo a otro dentro del sistema especial docente, por ejemplo, de docente de aula a docente orientador, o de docente orientador a docente de aula. En este caso debe revisarse el artículo 2.4.6.3.4 del Decreto 1075 de 2015, modificado por el Decreto 2105 de 2017.
-Reubicación por perfil, área o asignación:
-Cuando el docente sigue siendo docente de aula, pero cambia el área, nivel, perfil o asignación académica, por ejemplo, de primaria a matemáticas. En este caso debe verificarse si el acto está usando correctamente la norma de reubicación de cargo o si requiere una motivación distinta basada en la administración de la planta, necesidad del servicio, manual de funciones, perfil profesional y organización del servicio educativo.
-Indica si existe riesgo jurídico por llamar reubicación de cargo a lo que realmente parece ser una modificación de perfil o área de desempeño.
-
-4. Revisión normativa
-Extrae todas las normas citadas en el acto administrativo y clasifícalas así:
-Normas de competencia.
-Normas sobre administración del servicio educativo.
-Normas sobre planta docente.
-Normas sobre reubicación de cargo.
-Normas sobre manual de funciones, requisitos y perfiles.
-Normas sobre notificación, comunicación y recursos.
-Luego revisa:
-Si las normas están vigentes.
-Si son pertinentes para el caso.
-Si falta alguna norma relevante.
-Si alguna norma está mal citada, incompleta o usada fuera de contexto.
-Si el Decreto 1075 de 2015 se cita con el artículo correcto.
-Si la Resolución MEN 03842 de 2022 corresponde al cargo o perfil específico que se pretende asignar.
-
-5. Revisión de soportes
-Verifica si el expediente contiene, como mínimo, los siguientes soportes:
-Solicitud escrita del docente, cuando la reubicación se presenta a petición de parte.
-Formato único de novedades debidamente diligenciado.
-Documento de identidad o identificación plena del docente.
-Acto de nombramiento o información que demuestre el cargo actual.
-Constancia de que el docente tiene derechos de carrera, si se invoca la reubicación del artículo 2.4.6.3.4 del Decreto 1075 de 2015.
-Certificación o verificación de títulos académicos.
-Verificación del cumplimiento de requisitos mínimos del cargo o perfil de destino.
-Soporte de necesidad del servicio.
-Certificación de existencia de vacante o necesidad dentro de la planta, si aplica.
-Concepto o aval de la dependencia competente.
-Verificación de que la reubicación no afecta derechos de carrera, escalafón, remuneración ni estabilidad del docente.
-Evidencia de que el cambio es funcional, necesario y razonable.
-Indica si los soportes son suficientes o si debe requerirse información adicional antes de firmar el acto.
-
-6. Revisión de motivación
-Evalúa si la motivación del acto es suficiente.
-Revisa si el acto explica:
-Por qué existe necesidad del servicio.
-Por qué el docente cumple el perfil o requisitos del nuevo cargo o área.
-Por qué la reubicación resulta procedente.
-Si el cambio beneficia la prestación del servicio educativo.
-Si existe coherencia entre la solicitud, los soportes y la decisión.
-Si la motivación es concreta o si se limita a fórmulas generales.
-Si se diferencia adecuadamente entre cargo, perfil, área, asignación académica y establecimiento educativo.
-Sugiere redacciones para fortalecer la motivación, evitando afirmaciones genéricas.
-
-7. Revisión de la parte resolutiva
-Analiza si los artículos del acto son claros y completos.
-Verifica si la parte resolutiva identifica correctamente:
-Nombre completo del docente.
-Cédula.
-Cargo actual.
-Institución educativa actual.
-Cargo, perfil o área al que se reubica.
-Institución educativa donde prestará el servicio.
-Fecha a partir de la cual rige la decisión.
-Dependencias a las que debe comunicarse.
-Efectos administrativos, salariales y de carrera.
-Si procede o no recurso.
-Advierte si debe precisarse que la medida no implica pérdida de derechos de carrera, modificación del escalafón ni desmejora laboral.
-
-8. Revisión de recursos y notificación
-Verifica si el acto indica correctamente la forma de comunicación o notificación.
-Analiza:
-Si se debe comunicar o notificar personalmente.
-Si se cita correctamente el artículo 67 y siguientes de la Ley 1437 de 2011.
-Si la frase contra la presente resolución no proceden recursos es jurídicamente adecuada.
-Si, por tratarse de acto particular que afecta o define una situación individual, debe concederse recurso de reposición o apelación, o si puede sustentarse que se trata de un acto de administración interna o de ejecución de una solicitud aceptada.
-Si encuentras duda sobre recursos, advierte el riesgo y sugiere una fórmula más segura.
-
-9. Riesgos jurídicos
-Identifica riesgos como:
-Falta de competencia del firmante.
-Uso equivocado de la figura de reubicación de cargo para un simple cambio de perfil.
-Falta de soporte de necesidad del servicio.
-Falta de verificación del cumplimiento de requisitos del cargo o perfil.
-Ausencia de constancia sobre derechos de carrera.
-Posible afectación de derechos del docente.
-Falta de motivación suficiente.
-Confusión entre traslado, reubicación de cargo, reubicación por perfil y asignación académica.
-Problemas con recursos o notificación.
-Riesgo de que el acto sea demandado por falsa motivación, falta de competencia, desviación de poder o expedición irregular.
-
-10. Resultado esperado
-Entrega el análisis en el siguiente formato:
-A. Diagnóstico general
-Indica si el acto está jurídicamente viable, viable con ajustes o no recomendable para firma.
-B. Tipo real de actuación
-Precisa si se trata de reubicación de cargo, reubicación por perfil, cambio de área, asignación funcional, traslado o una figura mixta.
-C. Normas citadas y evaluación
-Haz una tabla con norma, finalidad dentro del acto y observación jurídica.
-D. Soportes revisados
-Indica cuáles soportes aparecen, cuáles faltan y cuáles deben verificarse.
-E. Observaciones de fondo
-Enumera los problemas jurídicos relevantes.
-F. Observaciones de forma y redacción
-Señala errores de redacción, coherencia, título, considerandos y parte resolutiva.
-G. Ajustes recomendados
-Propón cambios concretos al acto.
-H. Redacción sugerida
-Incluye textos sugeridos para mejorar los considerandos y la parte resolutiva.
-I. Concepto final para el abogado revisor
-Redacta una recomendación breve, técnica y prudente, como si fuera una nota interna para quien proyectó el acto.
-
-No inventes información que no esté en el expediente. Si falta un soporte, indícalo expresamente. Si no puedes verificar un dato, usa fórmulas como debe verificarse, debe acreditarse en el expediente o no se observa soporte suficiente en los documentos revisados.
-
-Responde en texto plano, sin asteriscos, sin símbolos markdown, sin ##, sin ---. Usa solo MAYÚSCULAS para títulos y guiones simples para listas.
-
-Al final de tu respuesta, escribe obligatoriamente una de estas tres líneas exactas, sin variaciones:
-VEREDICTO: APROBADO
-VEREDICTO: DESAPROBADO
-VEREDICTO: REQUIERE_REVISION"""
+PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "prompts")
 
 
 # ── Funciones auxiliares ───────────────────────────────────────
 
-def subir_pdf_a_openai(pdf_bytes: bytes, nombre: str) -> str:
+def cargar_prompt(nombre: str) -> str:
+    """Carga un prompt desde archivo. Si no existe, carga general.txt."""
+    ruta = os.path.join(PROMPTS_DIR, f"{nombre}.txt")
+    if not os.path.exists(ruta):
+        ruta = os.path.join(PROMPTS_DIR, "general.txt")
+    with open(ruta, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def subir_pdf(pdf_bytes: bytes, nombre: str) -> str:
     """Sube un PDF a OpenAI Files API y devuelve el file_id."""
     response = client.files.create(
         file=(nombre, pdf_bytes, "application/pdf"),
@@ -200,38 +62,119 @@ def subir_pdf_a_openai(pdf_bytes: bytes, nombre: str) -> str:
     return response.id
 
 
-def esperar_procesamiento(file_id: str, intentos: int = 10) -> bool:
+def esperar_procesamiento(file_id: str, intentos: int = 15) -> bool:
     """Espera hasta que OpenAI procese el archivo."""
     for _ in range(intentos):
-        file_info = client.files.retrieve(file_id)
-        if file_info.status == "processed":
+        info = client.files.retrieve(file_id)
+        if info.status == "processed":
             return True
         time.sleep(2)
     return False
 
 
-def analizar_documentos(file_ids: list[str]) -> str:
-    """Llama a OpenAI con todos los file_ids y devuelve el análisis."""
-    content = []
-
-    # Agrega cada archivo como objeto file
+def limpiar_archivos(file_ids: list):
+    """Elimina los archivos de OpenAI después de usarlos."""
     for fid in file_ids:
-        content.append({
-            "type": "file",
-            "file": {"file_id": fid}
-        })
+        try:
+            client.files.delete(fid)
+        except Exception:
+            pass
 
-    # Agrega el prompt jurídico al final
-    content.append({
-        "type": "text",
-        "text": PROMPT_JURIDICO
-    })
+
+def construir_content(file_ids: list, texto_prompt: str) -> list:
+    """Construye el content para la llamada a OpenAI con archivos + prompt."""
+    content = []
+    for fid in file_ids:
+        content.append({"type": "file", "file": {"file_id": fid}})
+    content.append({"type": "text", "text": texto_prompt})
+    return content
+
+
+def llamada_clasificador(file_ids: list) -> dict:
+    """
+    LLAMADA 1: Identifica el tipo de documento y extrae metadatos.
+    Devuelve dict con: tipo, dependencia, asunto, radicado, vencimiento,
+    riesgo, urgente, cantidad_casos, documentos.
+    """
+    prompt = cargar_prompt("clasificador")
+    content = construir_content(file_ids, prompt)
 
     response = client.chat.completions.create(
         model=MODEL,
-        messages=[
-            {"role": "user", "content": content}
-        ]
+        messages=[{"role": "user", "content": content}],
+        max_tokens=800
+    )
+
+    texto = response.choices[0].message.content.strip()
+
+    # Limpiar bloques markdown si los hay
+    if "```" in texto:
+        partes = texto.split("```")
+        for p in partes:
+            p = p.strip()
+            if p.startswith("json"):
+                p = p[4:].strip()
+            try:
+                return json.loads(p)
+            except Exception:
+                continue
+
+    try:
+        return json.loads(texto)
+    except Exception:
+        # Si falla el parseo, devolver valores por defecto
+        print(f"[WARN] No se pudo parsear clasificación: {texto}")
+        return {
+            "tipo": "OTRO",
+            "dependencia": "DESCONOCIDO",
+            "asunto": "No identificado",
+            "radicado": None,
+            "vencimiento": None,
+            "riesgo": "MEDIO",
+            "urgente": False,
+            "cantidad_casos": 1,
+            "documentos": []
+        }
+
+
+def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
+    """
+    LLAMADA 2: Análisis jurídico especializado según el tipo de documento.
+    """
+    nombre_prompt = MAPA_PROMPTS.get(tipo, "general")
+    prompt = cargar_prompt(nombre_prompt)
+
+    # Inyectar contexto de la clasificación al inicio del prompt
+    docs = clasificacion.get('documentos', [])
+    docs_texto = "\n".join(
+        f"  - {d.get('nombre','?')} -> {d.get('rol','desconocido')}"
+        for d in docs
+    ) if docs else "  No se identificaron documentos individuales"
+
+    contexto = (
+        f"[CONTEXTO PREVIO DE CLASIFICACION]\n"
+        f"Tipo: {clasificacion.get('tipo', 'N/A')}\n"
+        f"Dependencia: {clasificacion.get('dependencia', 'N/A')}\n"
+        f"Asunto: {clasificacion.get('asunto', 'N/A')}\n"
+        f"Radicado: {clasificacion.get('radicado', 'No identificado')}\n"
+        f"Vencimiento: {clasificacion.get('vencimiento', 'No identificado')}\n"
+        f"Riesgo: {clasificacion.get('riesgo', 'MEDIO')}\n"
+        f"Urgente: {clasificacion.get('urgente', False)}\n"
+        f"Casos en este correo: {clasificacion.get('cantidad_casos', 1)}\n"
+        f"Documentos identificados:\n{docs_texto}\n\n"
+        f"IMPORTANTE: Usa el rol de cada documento para orientar tu analisis. "
+        f"Si hay una peticion_ciudadana y una respuesta_proyectada, "
+        f"compara punto a punto que pidio el ciudadano y que responde la Secretaria.\n\n"
+    )
+
+
+    prompt_final = contexto + prompt
+    content = construir_content(file_ids, prompt_final)
+
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": content}],
+        max_tokens=4000
     )
 
     return response.choices[0].message.content
@@ -241,25 +184,83 @@ def extraer_veredicto(texto: str) -> str:
     """Extrae el veredicto del texto de respuesta."""
     for linea in texto.strip().split("\n"):
         linea = linea.strip()
-        if linea in ["VEREDICTO: APROBADO", "VEREDICTO: DESAPROBADO", "VEREDICTO: REQUIERE_REVISION"]:
+        if linea in [
+            "VEREDICTO: APROBADO",
+            "VEREDICTO: DESAPROBADO",
+            "VEREDICTO: REQUIERE_REVISION"
+        ]:
             return linea.replace("VEREDICTO: ", "")
-    # Si no encontró línea exacta, busca por contenido
     texto_upper = texto.upper()
     if "VEREDICTO: APROBADO" in texto_upper:
         return "APROBADO"
     elif "VEREDICTO: DESAPROBADO" in texto_upper:
         return "DESAPROBADO"
-    else:
-        return "REQUIERE_REVISION"
+    return "REQUIERE_REVISION"
 
 
-def limpiar_archivos(file_ids: list[str]):
-    """Elimina los archivos de OpenAI después de usarlos."""
-    for fid in file_ids:
-        try:
-            client.files.delete(fid)
-        except Exception:
-            pass  # Si falla la limpieza no es crítico
+def limpiar_pendientes_vencidos():
+    """Elimina entradas vencidas del acumulador (llamada periódica)."""
+    ahora = time.time()
+    with lock_pendientes:
+        vencidos = [
+            mid for mid, datos in pendientes.items()
+            if ahora - datos["timestamp"] > TTL_SEGUNDOS
+        ]
+        for mid in vencidos:
+            print(f"[WARN] Descartando correo vencido: {mid}")
+            del pendientes[mid]
+
+
+def procesar_correo(message_id: str, archivos_datos: list) -> dict:
+    """
+    Sube todos los PDFs, ejecuta las 2 llamadas a OpenAI y devuelve resultado.
+    archivos_datos: lista de dicts { "bytes": ..., "nombre": ... }
+    """
+    file_ids = []
+    try:
+        # Subir todos los PDFs
+        for archivo in archivos_datos:
+            print(f"Subiendo {archivo['nombre']}...")
+            fid = subir_pdf(archivo["bytes"], archivo["nombre"])
+            file_ids.append(fid)
+            print(f"  → {fid}")
+
+        # Esperar procesamiento
+        print("Esperando procesamiento de archivos...")
+        for fid in file_ids:
+            if not esperar_procesamiento(fid):
+                raise Exception(f"Timeout esperando procesamiento de {fid}")
+
+        # LLAMADA 1: Clasificar
+        print("Clasificando documentos...")
+        clasificacion = llamada_clasificador(file_ids)
+        tipo = clasificacion.get("tipo", "OTRO")
+        print(f"Tipo identificado: {tipo} | Dependencia: {clasificacion.get('dependencia')}")
+
+        # LLAMADA 2: Analizar
+        print(f"Analizando con prompt: {MAPA_PROMPTS.get(tipo, 'general')}...")
+        analisis = llamada_analizador(file_ids, tipo, clasificacion)
+
+        # Extraer veredicto
+        veredicto = extraer_veredicto(analisis)
+        print(f"Veredicto: {veredicto}")
+
+        return {
+            "tipo": tipo,
+            "dependencia": clasificacion.get("dependencia", "DESCONOCIDO"),
+            "asunto": clasificacion.get("asunto", ""),
+            "radicado": clasificacion.get("radicado"),
+            "vencimiento": clasificacion.get("vencimiento"),
+            "riesgo": clasificacion.get("riesgo", "MEDIO"),
+            "urgente": clasificacion.get("urgente", False),
+            "veredicto": veredicto,
+            "analisis": analisis,
+            "message_id": message_id,
+            "archivos_procesados": len(file_ids)
+        }
+
+    finally:
+        limpiar_archivos(file_ids)
 
 
 # ── Endpoint principal ─────────────────────────────────────────
@@ -267,78 +268,71 @@ def limpiar_archivos(file_ids: list[str]):
 @app.route("/analizar", methods=["POST"])
 def analizar():
     """
-    Recibe PDFs desde Make y devuelve el análisis jurídico.
+    Recibe PDFs desde Make, acumula por message_id, y procesa cuando llegan todos.
 
-    Make debe enviar:
-    - Header: X-API-Secret: <API_SECRET>
-    - Form-data con uno o más campos 'pdf' (archivos binarios)
-    - Opcionalmente: campo 'message_id' como referencia
+    Make debe enviar por cada PDF:
+    - Header: X-API-Secret
+    - Form-data:
+        pdf:          <archivo binario>
+        message_id:   <id del correo>
+        total_files:  <cantidad total de adjuntos en el correo>
     """
 
-    # Verificar autenticación
-    secret = request.headers.get("X-API-Secret")
-    if secret != API_SECRET:
+    # Autenticación
+    if request.headers.get("X-API-Secret") != API_SECRET:
         return jsonify({"error": "No autorizado"}), 401
 
-    # Verificar que llegaron archivos
     archivos = request.files.getlist("pdf")
     if not archivos:
         return jsonify({"error": "No se recibieron archivos PDF"}), 400
 
-    message_id = request.form.get("message_id", "sin_id")
-    file_ids = []
+    message_id  = request.form.get("message_id", "sin_id")
+    total_files = int(request.form.get("total_files", 1))
+
+    # Limpiar entradas vencidas antes de procesar
+    limpiar_pendientes_vencidos()
+
+    # Acumular archivos
+    with lock_pendientes:
+        if message_id not in pendientes:
+            pendientes[message_id] = {"archivos": [], "timestamp": time.time()}
+
+        for archivo in archivos:
+            pendientes[message_id]["archivos"].append({
+                "bytes":  archivo.read(),
+                "nombre": archivo.filename or "documento.pdf"
+            })
+
+        recibidos = len(pendientes[message_id]["archivos"])
+
+    print(f"[{message_id}] Recibidos {recibidos}/{total_files} archivos")
+
+    # Si aún faltan archivos, responder 202 y esperar
+    if recibidos < total_files:
+        return jsonify({
+            "status": "acumulando",
+            "recibidos": recibidos,
+            "esperados": total_files,
+            "message_id": message_id
+        }), 202
+
+    # Todos los archivos llegaron → procesar
+    with lock_pendientes:
+        datos_correo = pendientes.pop(message_id)["archivos"]
 
     try:
-        # 1. Subir cada PDF a OpenAI
-        for archivo in archivos:
-            pdf_bytes = archivo.read()
-            nombre = archivo.filename or "documento.pdf"
-            print(f"Subiendo {nombre}...")
-
-            file_id = subir_pdf_a_openai(pdf_bytes, nombre)
-            file_ids.append(file_id)
-            print(f"  → {file_id}")
-
-        # 2. Esperar que OpenAI procese todos los archivos
-        print("Esperando procesamiento...")
-        for fid in file_ids:
-            procesado = esperar_procesamiento(fid)
-            if not procesado:
-                raise Exception(f"Timeout esperando procesamiento de {fid}")
-
-        # 3. Analizar todos los documentos juntos
-        print(f"Analizando {len(file_ids)} documentos...")
-        analisis = analizar_documentos(file_ids)
-
-        # 4. Extraer veredicto
-        veredicto = extraer_veredicto(analisis)
-        print(f"Veredicto: {veredicto}")
-
-        # 5. Limpiar archivos de OpenAI
-        limpiar_archivos(file_ids)
-
-        return jsonify({
-            "veredicto": veredicto,
-            "analisis": analisis,
-            "message_id": message_id,
-            "archivos_procesados": len(file_ids)
-        })
-
+        resultado = procesar_correo(message_id, datos_correo)
+        return jsonify(resultado), 200
     except Exception as e:
-        # Si algo falla, limpiar archivos y reportar error
-        limpiar_archivos(file_ids)
-        print(f"Error: {str(e)}")
-        return jsonify({
-            "error": str(e),
-            "message_id": message_id
-        }), 500
+        print(f"Error procesando {message_id}: {str(e)}")
+        return jsonify({"error": str(e), "message_id": message_id}), 500
 
 
 # ── Health check ───────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "version": "2.0"})
 
 
 # ── Arranque local ─────────────────────────────────────────────

@@ -26,7 +26,7 @@ def load_env(path=".env"):
 load_env()
 
 # Configura estos valores
-URL        = os.environ.get("TEST_URL", "http://localhost:5000/analizar")
+URL        = os.environ.get("TEST_URL", "https://web-production-ac647.up.railway.app/analizar")
 API_SECRET = os.environ.get("API_SECRET", "elige_una_clave_secreta_larga_aqui")  # debe coincidir con .env
 
 def probar(archivos_pdf: list):
