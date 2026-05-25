@@ -102,6 +102,7 @@ def llamada_clasificador(file_ids: list) -> dict:
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": content}],
+        max_tokens=800
     )
 
     texto = response.choices[0].message.content.strip()
@@ -173,27 +174,26 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": content}],
+        max_tokens=4000
     )
 
     return response.choices[0].message.content
 
 
 def extraer_veredicto(texto: str) -> str:
-    """Extrae el veredicto del texto de respuesta."""
+    """Extrae el veredicto del texto de respuesta.
+    REQUIERE_REVISION se mapea a DESAPROBADO — solo existen dos estados finales.
+    """
     for linea in texto.strip().split("\n"):
         linea = linea.strip()
-        if linea in [
-            "VEREDICTO: APROBADO",
-            "VEREDICTO: DESAPROBADO",
-            "VEREDICTO: REQUIERE_REVISION"
-        ]:
-            return linea.replace("VEREDICTO: ", "")
+        if linea == "VEREDICTO: APROBADO":
+            return "APROBADO"
+        if linea in ["VEREDICTO: DESAPROBADO", "VEREDICTO: REQUIERE_REVISION"]:
+            return "DESAPROBADO"
     texto_upper = texto.upper()
     if "VEREDICTO: APROBADO" in texto_upper:
         return "APROBADO"
-    elif "VEREDICTO: DESAPROBADO" in texto_upper:
-        return "DESAPROBADO"
-    return "REQUIERE_REVISION"
+    return "DESAPROBADO"
 
 
 def limpiar_pendientes_vencidos():
