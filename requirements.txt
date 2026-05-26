@@ -3,4 +3,3 @@ openai==1.30.0
 httpx==0.27.0
 gunicorn==22.0.0
 python-dotenv==1.0.1
-gevent==23.9.1
