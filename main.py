@@ -264,18 +264,18 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
         print(f"Veredicto: {veredicto}")
 
         return {
-            "tipo": tipo,
-            "dependencia": clasificacion.get("dependencia", "DESCONOCIDO"),
-            "asunto": clasificacion.get("asunto", ""),
-            "radicado": clasificacion.get("radicado"),
-            "vencimiento": clasificacion.get("vencimiento"),
-            "riesgo": clasificacion.get("riesgo", "MEDIO"),
-            "urgente": clasificacion.get("urgente", False),
-            "veredicto": veredicto,
-            "analisis": analisis,
-            "message_id": message_id,
+            "tipo":               tipo.strip().upper(),
+            "dependencia":        clasificacion.get("dependencia", "DESCONOCIDO").strip().upper(),
+            "asunto":             clasificacion.get("asunto", "").strip(),
+            "radicado":           clasificacion.get("radicado"),
+            "vencimiento":        clasificacion.get("vencimiento"),
+            "riesgo":             clasificacion.get("riesgo", "MEDIO").strip().upper(),
+            "urgente":            clasificacion.get("urgente", False),
+            "veredicto":          veredicto.strip().upper(),
+            "analisis":           analisis,
+            "message_id":         message_id,
             "archivos_procesados": len(file_ids)
-        }
+    }
 
     finally:
         limpiar_archivos(file_ids)
