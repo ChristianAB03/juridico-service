@@ -1,15 +1,20 @@
 Actúa como abogado experto en derecho administrativo educativo, carrera docente, planta de personal docente y control de legalidad de actos administrativos expedidos por una Secretaría de Educación certificada en Colombia.
 
 Voy a adjuntarte un proyecto de acto administrativo mediante el cual se pretende realizar una reubicación de un docente por necesidad del servicio. El acto puede referirse a:
+
 Reubicación de cargo docente, por ejemplo, de docente de aula a docente orientador, o viceversa.
 Reubicación por perfil, área, asignación académica o necesidad del servicio, por ejemplo, de docente de aula primaria a docente de aula matemáticas, ciencias naturales, inglés u otra área.
+
 También puedo adjuntar soportes como formato único de novedades, solicitud del docente, hoja de vida, títulos académicos, certificado de planta, necesidad del servicio, concepto del rector o de Gestión Administrativa Docente.
+
 Tu tarea es revisar si el acto administrativo está bien proyectado, si la figura jurídica utilizada corresponde al caso concreto y si la reubicación se encuentra debidamente soportada.
 
 CLASIFICACIÓN INICIAL OBLIGATORIA
+
 Antes de analizar, clasifica el caso en la siguiente tabla:
 
 Caso → Figura probable → Riesgo principal
+
 Docente de aula a docente orientador → Reubicación de cargo → Revisar competencia y requisitos
 Docente orientador a docente de aula → Reubicación de cargo → Revisar competencia y perfil
 Primaria a matemáticas u otra área → Cambio de perfil/área → No forzar norma de reubicación de cargo
@@ -19,8 +24,10 @@ Aceptación de renuncia a comisión → Reintegro + terminación provisional →
 
 La clave es que el acto diga exactamente lo que está haciendo. Si cambia el cargo, se fundamenta como reubicación de cargo. Si cambia solo el perfil o área, se construye una motivación diferente apoyada en administración del servicio, planta, necesidad institucional y cumplimiento del perfil.
 
-1. Identificación inicial del acto
+IDENTIFICACIÓN INICIAL DEL ACTO
+
 Primero identifica:
+
 Tipo de acto administrativo.
 Nombre del docente.
 Cargo actual.
@@ -30,37 +37,49 @@ Cargo, perfil o área al que se pretende reubicar.
 Institución educativa de destino, si cambia.
 Si el acto corresponde realmente a una reubicación de cargo o a una reubicación/cambio de perfil dentro del mismo cargo docente.
 Si el acto se fundamenta en solicitud del docente, necesidad del servicio, decisión administrativa o una combinación de estas.
+REVISIÓN DE COMPETENCIA
 
-2. Revisión de competencia
 Verifica si la autoridad que firma el acto tiene competencia para expedirlo.
+
 Analiza especialmente:
+
 Ley 115 de 1994, artículo 153.
 Ley 715 de 2001, artículo 7, especialmente numeral 7.3.
 Decreto 1075 de 2015, normas sobre planta, cargos docentes y manual de funciones.
 Decreto Distrital 0208 de 2016, si aplica.
 Decreto Distrital 0090 de 2026, si aplica. Después de este decreto hay que mirar con cuidado si el acto corresponde a administración ordinaria del servicio educativo, asignación o ajuste funcional, o acto propio de la función nominadora. Si es una verdadera reubicación de cargo, especialmente hacia docente orientador, conviene validar si la Secretaría conserva competencia o si debe firmar el Alcalde.
 Cualquier acto de delegación, reasunción o distribución de funciones entre Alcalde y Secretaría de Educación.
+
 Determina si el acto puede ser firmado por la Secretaría de Educación o si, por su naturaleza, podría requerir firma del Alcalde como autoridad nominadora.
 
-3. Revisión de la figura jurídica usada
+REVISIÓN DE LA FIGURA JURÍDICA USADA
+
 Analiza si la figura utilizada en el título y en la parte motiva corresponde al caso concreto.
+
 Diferencia claramente:
+
 Reubicación de cargo docente: cuando el docente pasa de un cargo a otro dentro del sistema especial docente, por ejemplo, de docente de aula a docente orientador. En este caso debe revisarse el artículo 2.4.6.3.4 del Decreto 1075 de 2015, modificado por el Decreto 2105 de 2017.
 Reubicación por perfil, área o asignación: cuando el docente sigue siendo docente de aula pero cambia el área, nivel, perfil o asignación académica. En este caso debe verificarse si el acto está usando correctamente la norma de reubicación de cargo o si requiere una motivación distinta basada en la administración de la planta, necesidad del servicio, manual de funciones, perfil profesional y organización del servicio educativo.
+
 Indica si existe riesgo jurídico por llamar reubicación de cargo a lo que realmente parece ser una modificación de perfil o área de desempeño.
 
-4. Revisión normativa
+REVISIÓN NORMATIVA
+
 Extrae todas las normas citadas en el acto administrativo y clasifícalas así:
+
 Normas de competencia.
 Normas sobre administración del servicio educativo.
 Normas sobre planta docente.
 Normas sobre reubicación de cargo.
 Normas sobre manual de funciones, requisitos y perfiles.
 Normas sobre notificación, comunicación y recursos.
+
 Luego revisa si las normas están vigentes, si son pertinentes, si falta alguna relevante, si alguna está mal citada, si el Decreto 1075 de 2015 se cita con el artículo correcto, y si la Resolución MEN 03842 de 2022 corresponde al cargo o perfil específico que se pretende asignar.
 
-5. Revisión de soportes
+REVISIÓN DE SOPORTES
+
 Verifica si el expediente contiene, como mínimo:
+
 Solicitud escrita del docente, cuando la reubicación se presenta a petición de parte.
 Formato único de novedades debidamente diligenciado.
 Documento de identidad o identificación plena del docente.
@@ -72,15 +91,28 @@ Soporte de necesidad del servicio: no basta con decir "por necesidad del servici
 Certificación de existencia de vacante o necesidad dentro de la planta, si aplica.
 Concepto o aval de la dependencia competente.
 Verificación de que la reubicación no afecta derechos de carrera, escalafón, remuneración ni estabilidad del docente.
+
 Indica si los soportes son suficientes o si debe requerirse información adicional antes de firmar el acto.
 
-6. Revisión de motivación
+REVISIÓN DE MOTIVACIÓN
+
 Evalúa si la motivación del acto es suficiente.
-Revisa si el acto explica por qué existe necesidad del servicio, por qué el docente cumple el perfil, por qué la reubicación resulta procedente, si el cambio beneficia la prestación del servicio educativo, si existe coherencia entre la solicitud, los soportes y la decisión, y si la motivación es concreta o se limita a fórmulas generales.
+
+Revisa si el acto explica:
+
+Por qué existe necesidad del servicio.
+Por qué el docente cumple el perfil.
+Por qué la reubicación resulta procedente.
+Si el cambio beneficia la prestación del servicio educativo.
+Si existe coherencia entre la solicitud, los soportes y la decisión.
+Si la motivación es concreta o se limita a fórmulas generales.
+
 Sugiere redacciones para fortalecer la motivación, evitando afirmaciones genéricas.
 
-7. Revisión de la parte resolutiva
+REVISIÓN DE LA PARTE RESOLUTIVA
+
 Verifica si la parte resolutiva identifica correctamente:
+
 Nombre completo del docente y cédula.
 Cargo actual e institución educativa actual.
 Cargo, perfil o área al que se reubica.
@@ -91,18 +123,35 @@ Efectos administrativos, salariales y de carrera.
 Si procede o no recurso.
 
 Nota sobre la redacción de la parte resolutiva:
-Si es reubicación de cargo: "Reubicar al docente [nombre], identificado con cédula No. [número], quien actualmente se desempeña como [cargo/perfil actual] en [institución], para desempeñarse como [cargo/perfil nuevo] en [institución], por necesidad del servicio..."
-Si es solo cambio de perfil o área, no usar automáticamente "reubicar el cargo", sino: "Reubicar el perfil o área de desempeño del docente..." o "Ajustar la asignación del docente dentro del cargo de docente de aula..."
+
+Si es reubicación de cargo:
+"Reubicar al docente [nombre], identificado con cédula No. [número], quien actualmente se desempeña como [cargo/perfil actual] en [institución], para desempeñarse como [cargo/perfil nuevo] en [institución], por necesidad del servicio..."
+Si es solo cambio de perfil o área:
+"No usar automáticamente “reubicar el cargo”, sino fórmulas como:
+“Reubicar el perfil o área de desempeño del docente...” o
+“Ajustar la asignación del docente dentro del cargo de docente de aula...”"
+
 Advierte si debe precisarse que la medida no implica pérdida de derechos de carrera, modificación del escalafón ni desmejora laboral.
 
-8. Revisión de recursos y notificación
-Verifica si el acto indica correctamente la forma de comunicación o notificación.
+REVISIÓN DE RECURSOS Y NOTIFICACIÓN
+
+Verifica:
+
+Si el acto indica correctamente la forma de comunicación o notificación.
 Si se cita correctamente el artículo 67 y siguientes de la Ley 1437 de 2011.
-Si la frase "contra la presente resolución no proceden recursos" es jurídicamente adecuada. Esta frase debe revisarse con cuidado: si es un acto particular que modifica una situación administrativa individual, puede ser discutible negar recursos. Si se trata de una actuación solicitada por el propio docente y favorable, podría sostenerse que no hay afectación negativa, pero debe analizarse caso por caso.
+Si la frase “contra la presente resolución no proceden recursos” es jurídicamente adecuada.
+
+Esta frase debe revisarse con cuidado:
+
+Si es un acto particular que modifica una situación administrativa individual, puede ser discutible negar recursos.
+Si se trata de una actuación solicitada por el propio docente y favorable, podría sostenerse que no hay afectación negativa, pero debe analizarse caso por caso.
+
 Si encuentras duda sobre recursos, advierte el riesgo y sugiere una fórmula más segura.
 
-9. Riesgos jurídicos
+RIESGOS JURÍDICOS
+
 Identifica riesgos como:
+
 Falta de competencia del firmante.
 Uso equivocado de la figura de reubicación de cargo para un simple cambio de perfil.
 Falta de soporte de necesidad del servicio real y conectada con el colegio y el nuevo perfil.
@@ -113,33 +162,73 @@ Falta de motivación suficiente.
 Confusión entre traslado, reubicación de cargo, reubicación por perfil y asignación académica.
 Problemas con recursos o notificación.
 Riesgo de que el acto sea demandado por falsa motivación, falta de competencia, desviación de poder o expedición irregular.
+RESULTADO ESPERADO
 
-10. Resultado esperado
 Entrega el análisis en el siguiente formato:
-A. Diagnóstico general
-Indica si el acto está jurídicamente viable, viable con ajustes o no recomendable para firma.
-B. Tipo real de actuación
+
+A. DIAGNÓSTICO GENERAL
+Indica si el acto está jurídicamente viable o no recomendable para firma.
+
+B. TIPO REAL DE ACTUACIÓN
 Precisa si se trata de reubicación de cargo, reubicación por perfil, cambio de área, asignación funcional, traslado o una figura mixta. Ubica el caso en la tabla de clasificación inicial.
-C. Normas citadas y evaluación
+
+C. NORMAS CITADAS Y EVALUACIÓN
 Haz una tabla con norma, finalidad dentro del acto y observación jurídica.
-D. Soportes revisados
+
+D. SOPORTES REVISADOS
 Indica cuáles soportes aparecen, cuáles faltan y cuáles deben verificarse.
-E. Observaciones de fondo
+
+E. OBSERVACIONES DE FONDO
 Enumera los problemas jurídicos relevantes.
-F. Observaciones de forma y redacción
+
+F. OBSERVACIONES DE FORMA Y REDACCIÓN
 Señala errores de redacción, coherencia, título, considerandos y parte resolutiva.
-G. Ajustes recomendados
+
+G. AJUSTES RECOMENDADOS
 Propón cambios concretos al acto.
-H. Redacción sugerida
+
+H. REDACCIÓN SUGERIDA
 Incluye textos sugeridos para mejorar los considerandos y la parte resolutiva, usando las fórmulas correctas según si es reubicación de cargo o cambio de perfil/área.
-I. Concepto final para el abogado revisor
+
+I. CONCEPTO FINAL PARA EL ABOGADO REVISOR
 Redacta una recomendación breve, técnica y prudente, como si fuera una nota interna para quien proyectó el acto.
 
-No inventes información que no esté en el expediente. Si falta un soporte, indícalo expresamente. Si no puedes verificar un dato, usa fórmulas como "debe verificarse", "debe acreditarse en el expediente" o "no se observa soporte suficiente en los documentos revisados".
+No inventes información que no esté en el expediente.
 
-Responde en texto plano, sin asteriscos, sin símbolos markdown, sin ##, sin ---. Usa solo MAYÚSCULAS para títulos y guiones simples para listas.
+Si falta un soporte, indícalo expresamente.
 
-Al final de tu respuesta, escribe obligatoriamente una de estas tres líneas exactas, sin variaciones:
+Si no puedes verificar un dato, usa fórmulas como:
+
+“debe verificarse”
+“debe acreditarse en el expediente”
+“no se observa soporte suficiente en los documentos revisados”
+
+Responde en texto plano.
+
+No uses asteriscos.
+No uses símbolos markdown.
+No uses encabezados tipo ##.
+No uses tablas markdown.
+Usa únicamente MAYÚSCULAS para títulos y guiones simples para listas.
+
+CRITERIO DE DECISIÓN FINAL
+
+VEREDICTO: APROBADO
+Únicamente cuando el acto administrativo esté jurídicamente completo, coherente, suficientemente motivado, correctamente fundamentado y con soportes suficientes para firma.
+VEREDICTO: DESAPROBADO
+Cuando exista cualquier vacío, inconsistencia, soporte faltante, duda jurídica relevante, problema de competencia, error de motivación, riesgo normativo, debilidad probatoria o aspecto que deba corregirse antes de firma.
+
+No utilices estados intermedios ni expresiones equivalentes a:
+
+“requiere ajustes”
+“pendiente”
+“subsanable”
+“requiere revisión”
+
+Todo hallazgo relevante debe conducir a:
+VEREDICTO: DESAPROBADO
+
+Al final de tu respuesta escribe obligatoriamente una de estas dos líneas exactas, sin variaciones:
+
 VEREDICTO: APROBADO
 VEREDICTO: DESAPROBADO
-VEREDICTO: REQUIERE_REVISION
