@@ -1,5 +1,5 @@
 """
-MICROSERVICIO JURÍDICO v2.0
+MICROSERVICIO JURÍDICO v2.1
 Arquitectura de doble llamada: Clasificador → Analizador especializado
 Acumulación de PDFs por message_id para recibir múltiples archivos del mismo correo.
 """
@@ -15,6 +15,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+
+# ── Versión del build ──────────────────────────────────────────
+BUILD_VERSION = "2.1"
+BUILD_DATE    = "2026-05-26"
+BUILD_FIX     = "REQUIERE_REVISION→DESAPROBADO activo"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -166,7 +171,6 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
         f"compara punto a punto que pidio el ciudadano y que responde la Secretaria.\n\n"
     )
 
-
     prompt_final = contexto + prompt
     content = construir_content(file_ids, prompt_final)
 
@@ -179,18 +183,36 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
 
 
 def extraer_veredicto(texto: str) -> str:
-    """Extrae el veredicto del texto de respuesta.
-    REQUIERE_REVISION se mapea a DESAPROBADO — solo existen dos estados finales.
     """
+    Extrae el veredicto del análisis jurídico.
+
+    Regla: REQUIERE_REVISION y DESAPROBADO son equivalentes.
+    Solo existen dos estados finales: APROBADO o DESAPROBADO.
+
+    Busca primero coincidencia exacta línea por línea,
+    luego búsqueda laxa en todo el texto (maneja espacios, variantes).
+    """
+    APROBADOS     = {"VEREDICTO: APROBADO"}
+    DESAPROBADOS  = {"VEREDICTO: DESAPROBADO", "VEREDICTO: REQUIERE_REVISION"}
+
+    # Paso 1 — coincidencia exacta por línea (más confiable)
     for linea in texto.strip().split("\n"):
-        linea = linea.strip()
-        if linea == "VEREDICTO: APROBADO":
+        linea_norm = linea.strip().upper()
+        if linea_norm in APROBADOS:
             return "APROBADO"
-        if linea in ["VEREDICTO: DESAPROBADO", "VEREDICTO: REQUIERE_REVISION"]:
+        if linea_norm in DESAPROBADOS:
             return "DESAPROBADO"
+
+    # Paso 2 — búsqueda laxa en todo el texto (por si el modelo agrega espacios/símbolos)
     texto_upper = texto.upper()
     if "VEREDICTO: APROBADO" in texto_upper:
         return "APROBADO"
+    if "VEREDICTO: DESAPROBADO" in texto_upper or "VEREDICTO: REQUIERE_REVISION" in texto_upper:
+        return "DESAPROBADO"
+
+    # Paso 3 — fallback seguro
+    print(f"[WARN] No se encontró veredicto explícito. Texto (últimas 3 líneas): "
+          f"{texto.strip().split(chr(10))[-3:]}")
     return "DESAPROBADO"
 
 
@@ -259,6 +281,25 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
         limpiar_archivos(file_ids)
 
 
+# ── Endpoints de diagnóstico ───────────────────────────────────
+
+@app.route("/version", methods=["GET"])
+def version():
+    """Confirma qué versión del código está corriendo en Railway."""
+    return jsonify({
+        "version":    BUILD_VERSION,
+        "build_date": BUILD_DATE,
+        "fix":        BUILD_FIX,
+        "model":      MODEL,
+        "status":     "ok"
+    })
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "version": BUILD_VERSION})
+
+
 # ── Endpoint principal ─────────────────────────────────────────
 
 @app.route("/analizar", methods=["POST"])
@@ -322,13 +363,6 @@ def analizar():
     except Exception as e:
         print(f"Error procesando {message_id}: {str(e)}")
         return jsonify({"error": str(e), "message_id": message_id}), 500
-
-
-# ── Health check ───────────────────────────────────────────────
-
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok", "version": "2.0"})
 
 
 # ── Arranque local ─────────────────────────────────────────────
