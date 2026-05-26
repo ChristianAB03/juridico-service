@@ -1,5 +1,5 @@
 """
-MICROSERVICIO JURÍDICO v2.1
+MICROSERVICIO JURÍDICO v2.2
 Arquitectura de doble llamada: Clasificador → Analizador especializado
 Acumulación de PDFs por message_id para recibir múltiples archivos del mismo correo.
 """
@@ -17,9 +17,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "2.1"
+BUILD_VERSION = "2.2"
 BUILD_DATE    = "2026-05-26"
-BUILD_FIX     = "REQUIERE_REVISION→DESAPROBADO activo"
+BUILD_FIX     = "Campo carpeta agregado para Router de Make"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -42,6 +42,18 @@ MAPA_PROMPTS = {
     "REQUERIMIENTO": "requerimiento",
     "OFICIO":        "oficio",
     "OTRO":          "general",
+}
+
+# ── Mapa tipo+veredicto → carpeta destino ─────────────────────
+MAPA_CARPETAS = {
+    ("RESOLUCION",    "APROBADO"):    "RESOLUCION_APROBADO",
+    ("RESOLUCION",    "DESAPROBADO"): "RESOLUCION_DESAPROBADO",
+    ("TUTELA",        "APROBADO"):    "TUTELA_APROBADO",
+    ("TUTELA",        "DESAPROBADO"): "TUTELA_DESAPROBADO",
+    ("PETICION",      "APROBADO"):    "PETICION_APROBADO",
+    ("PETICION",      "DESAPROBADO"): "PETICION_DESAPROBADO",
+    ("REQUERIMIENTO", "APROBADO"):    "REQUERIMIENTO_APROBADO",
+    ("REQUERIMIENTO", "DESAPROBADO"): "REQUERIMIENTO_DESAPROBADO",
 }
 
 PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "prompts")
@@ -126,7 +138,6 @@ def llamada_clasificador(file_ids: list) -> dict:
     try:
         return json.loads(texto)
     except Exception:
-        # Si falla el parseo, devolver valores por defecto
         print(f"[WARN] No se pudo parsear clasificación: {texto}")
         return {
             "tipo": "OTRO",
@@ -148,7 +159,6 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
     nombre_prompt = MAPA_PROMPTS.get(tipo, "general")
     prompt = cargar_prompt(nombre_prompt)
 
-    # Inyectar contexto de la clasificación al inicio del prompt
     docs = clasificacion.get('documentos', [])
     docs_texto = "\n".join(
         f"  - {d.get('nombre','?')} -> {d.get('rol','desconocido')}"
@@ -185,17 +195,13 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
 def extraer_veredicto(texto: str) -> str:
     """
     Extrae el veredicto del análisis jurídico.
-
-    Regla: REQUIERE_REVISION y DESAPROBADO son equivalentes.
+    REQUIERE_REVISION y DESAPROBADO son equivalentes.
     Solo existen dos estados finales: APROBADO o DESAPROBADO.
-
-    Busca primero coincidencia exacta línea por línea,
-    luego búsqueda laxa en todo el texto (maneja espacios, variantes).
     """
-    APROBADOS     = {"VEREDICTO: APROBADO"}
-    DESAPROBADOS  = {"VEREDICTO: DESAPROBADO", "VEREDICTO: REQUIERE_REVISION"}
+    APROBADOS    = {"VEREDICTO: APROBADO"}
+    DESAPROBADOS = {"VEREDICTO: DESAPROBADO", "VEREDICTO: REQUIERE_REVISION"}
 
-    # Paso 1 — coincidencia exacta por línea (más confiable)
+    # Paso 1 — coincidencia exacta por línea
     for linea in texto.strip().split("\n"):
         linea_norm = linea.strip().upper()
         if linea_norm in APROBADOS:
@@ -203,7 +209,7 @@ def extraer_veredicto(texto: str) -> str:
         if linea_norm in DESAPROBADOS:
             return "DESAPROBADO"
 
-    # Paso 2 — búsqueda laxa en todo el texto (por si el modelo agrega espacios/símbolos)
+    # Paso 2 — búsqueda laxa en todo el texto
     texto_upper = texto.upper()
     if "VEREDICTO: APROBADO" in texto_upper:
         return "APROBADO"
@@ -211,13 +217,13 @@ def extraer_veredicto(texto: str) -> str:
         return "DESAPROBADO"
 
     # Paso 3 — fallback seguro
-    print(f"[WARN] No se encontró veredicto explícito. Texto (últimas 3 líneas): "
+    print(f"[WARN] No se encontró veredicto explícito. Últimas 3 líneas: "
           f"{texto.strip().split(chr(10))[-3:]}")
     return "DESAPROBADO"
 
 
 def limpiar_pendientes_vencidos():
-    """Elimina entradas vencidas del acumulador (llamada periódica)."""
+    """Elimina entradas vencidas del acumulador."""
     ahora = time.time()
     with lock_pendientes:
         vencidos = [
@@ -252,30 +258,32 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
         # LLAMADA 1: Clasificar
         print("Clasificando documentos...")
         clasificacion = llamada_clasificador(file_ids)
-        tipo = clasificacion.get("tipo", "OTRO")
+        tipo = clasificacion.get("tipo", "OTRO").strip().upper()
         print(f"Tipo identificado: {tipo} | Dependencia: {clasificacion.get('dependencia')}")
 
         # LLAMADA 2: Analizar
         print(f"Analizando con prompt: {MAPA_PROMPTS.get(tipo, 'general')}...")
         analisis = llamada_analizador(file_ids, tipo, clasificacion)
 
-        # Extraer veredicto
+        # Extraer veredicto y calcular carpeta destino
         veredicto = extraer_veredicto(analisis)
-        print(f"Veredicto: {veredicto}")
+        carpeta   = MAPA_CARPETAS.get((tipo, veredicto), "OTRO")
+        print(f"Veredicto: {veredicto} | Carpeta: {carpeta}")
 
         return {
-            "tipo":               tipo.strip().upper(),
-            "dependencia":        clasificacion.get("dependencia", "DESCONOCIDO").strip().upper(),
-            "asunto":             clasificacion.get("asunto", "").strip(),
-            "radicado":           clasificacion.get("radicado"),
-            "vencimiento":        clasificacion.get("vencimiento"),
-            "riesgo":             clasificacion.get("riesgo", "MEDIO").strip().upper(),
-            "urgente":            clasificacion.get("urgente", False),
-            "veredicto":          veredicto.strip().upper(),
-            "analisis":           analisis,
-            "message_id":         message_id,
+            "tipo":                tipo,
+            "dependencia":         clasificacion.get("dependencia", "DESCONOCIDO").strip().upper(),
+            "asunto":              clasificacion.get("asunto", "").strip(),
+            "radicado":            clasificacion.get("radicado"),
+            "vencimiento":         clasificacion.get("vencimiento"),
+            "riesgo":              clasificacion.get("riesgo", "MEDIO").strip().upper(),
+            "urgente":             clasificacion.get("urgente", False),
+            "veredicto":           veredicto,
+            "carpeta":             carpeta,
+            "analisis":            analisis,
+            "message_id":          message_id,
             "archivos_procesados": len(file_ids)
-    }
+        }
 
     finally:
         limpiar_archivos(file_ids)
