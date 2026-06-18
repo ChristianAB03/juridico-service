@@ -1,5 +1,5 @@
 """
-MICROSERVICIO JURÍDICO v2.2
+MICROSERVICIO JURÍDICO v2.3
 Arquitectura de doble llamada: Clasificador → Analizador especializado
 Acumulación de PDFs por message_id para recibir múltiples archivos del mismo correo.
 """
@@ -17,9 +17,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "2.2"
+BUILD_VERSION = "2.3"
 BUILD_DATE    = "2026-05-26"
-BUILD_FIX     = "Campo carpeta agregado para Router de Make"
+BUILD_FIX     = "Módulo retiro forzoso + clasificador actualizado"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -29,31 +29,33 @@ MODEL          = "gpt-5.4-mini-2026-03-17"
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 # ── Acumulador de PDFs por correo ──────────────────────────────
-# Estructura: { message_id: { "archivos": [...], "timestamp": float } }
 pendientes = {}
 lock_pendientes = threading.Lock()
-TTL_SEGUNDOS = 300  # 5 minutos máximo de espera por correo
+TTL_SEGUNDOS = 300
 
 # ── Mapa de tipos a archivos de prompt ────────────────────────
 MAPA_PROMPTS = {
-    "RESOLUCION":    "resolucion",
-    "TUTELA":        "tutela",
-    "PETICION":      "peticion",
-    "REQUERIMIENTO": "requerimiento",
-    "OFICIO":        "oficio",
-    "OTRO":          "general",
+    "RESOLUCION":     "resolucion",
+    "RETIRO_FORZOSO": "retiro_forzoso",
+    "TUTELA":         "tutela",
+    "PETICION":       "peticion",
+    "REQUERIMIENTO":  "requerimiento",
+    "OFICIO":         "oficio",
+    "OTRO":           "general",
 }
 
 # ── Mapa tipo+veredicto → carpeta destino ─────────────────────
 MAPA_CARPETAS = {
-    ("RESOLUCION",    "APROBADO"):    "RESOLUCION_APROBADO",
-    ("RESOLUCION",    "DESAPROBADO"): "RESOLUCION_DESAPROBADO",
-    ("TUTELA",        "APROBADO"):    "TUTELA_APROBADO",
-    ("TUTELA",        "DESAPROBADO"): "TUTELA_DESAPROBADO",
-    ("PETICION",      "APROBADO"):    "PETICION_APROBADO",
-    ("PETICION",      "DESAPROBADO"): "PETICION_DESAPROBADO",
-    ("REQUERIMIENTO", "APROBADO"):    "REQUERIMIENTO_APROBADO",
-    ("REQUERIMIENTO", "DESAPROBADO"): "REQUERIMIENTO_DESAPROBADO",
+    ("RESOLUCION",     "APROBADO"):    "RESOLUCION_APROBADO",
+    ("RESOLUCION",     "DESAPROBADO"): "RESOLUCION_DESAPROBADO",
+    ("RETIRO_FORZOSO", "APROBADO"):    "RETIRO_FORZOSO_APROBADO",
+    ("RETIRO_FORZOSO", "DESAPROBADO"): "RETIRO_FORZOSO_DESAPROBADO",
+    ("TUTELA",         "APROBADO"):    "TUTELA_APROBADO",
+    ("TUTELA",         "DESAPROBADO"): "TUTELA_DESAPROBADO",
+    ("PETICION",       "APROBADO"):    "PETICION_APROBADO",
+    ("PETICION",       "DESAPROBADO"): "PETICION_DESAPROBADO",
+    ("REQUERIMIENTO",  "APROBADO"):    "REQUERIMIENTO_APROBADO",
+    ("REQUERIMIENTO",  "DESAPROBADO"): "REQUERIMIENTO_DESAPROBADO",
 }
 
 PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "prompts")
@@ -62,7 +64,6 @@ PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "prompts")
 # ── Funciones auxiliares ───────────────────────────────────────
 
 def cargar_prompt(nombre: str) -> str:
-    """Carga un prompt desde archivo. Si no existe, carga general.txt."""
     ruta = os.path.join(PROMPTS_DIR, f"{nombre}.txt")
     if not os.path.exists(ruta):
         ruta = os.path.join(PROMPTS_DIR, "general.txt")
@@ -71,7 +72,6 @@ def cargar_prompt(nombre: str) -> str:
 
 
 def subir_pdf(pdf_bytes: bytes, nombre: str) -> str:
-    """Sube un PDF a OpenAI Files API y devuelve el file_id."""
     response = client.files.create(
         file=(nombre, pdf_bytes, "application/pdf"),
         purpose="user_data"
@@ -80,7 +80,6 @@ def subir_pdf(pdf_bytes: bytes, nombre: str) -> str:
 
 
 def esperar_procesamiento(file_id: str, intentos: int = 15) -> bool:
-    """Espera hasta que OpenAI procese el archivo."""
     for _ in range(intentos):
         info = client.files.retrieve(file_id)
         if info.status == "processed":
@@ -90,7 +89,6 @@ def esperar_procesamiento(file_id: str, intentos: int = 15) -> bool:
 
 
 def limpiar_archivos(file_ids: list):
-    """Elimina los archivos de OpenAI después de usarlos."""
     for fid in file_ids:
         try:
             client.files.delete(fid)
@@ -99,7 +97,6 @@ def limpiar_archivos(file_ids: list):
 
 
 def construir_content(file_ids: list, texto_prompt: str) -> list:
-    """Construye el content para la llamada a OpenAI con archivos + prompt."""
     content = []
     for fid in file_ids:
         content.append({"type": "file", "file": {"file_id": fid}})
@@ -108,11 +105,6 @@ def construir_content(file_ids: list, texto_prompt: str) -> list:
 
 
 def llamada_clasificador(file_ids: list) -> dict:
-    """
-    LLAMADA 1: Identifica el tipo de documento y extrae metadatos.
-    Devuelve dict con: tipo, dependencia, asunto, radicado, vencimiento,
-    riesgo, urgente, cantidad_casos, documentos.
-    """
     prompt = cargar_prompt("clasificador")
     content = construir_content(file_ids, prompt)
 
@@ -123,7 +115,6 @@ def llamada_clasificador(file_ids: list) -> dict:
 
     texto = response.choices[0].message.content.strip()
 
-    # Limpiar bloques markdown si los hay
     if "```" in texto:
         partes = texto.split("```")
         for p in partes:
@@ -153,9 +144,6 @@ def llamada_clasificador(file_ids: list) -> dict:
 
 
 def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
-    """
-    LLAMADA 2: Análisis jurídico especializado según el tipo de documento.
-    """
     nombre_prompt = MAPA_PROMPTS.get(tipo, "general")
     prompt = cargar_prompt(nombre_prompt)
 
@@ -176,9 +164,7 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
         f"Urgente: {clasificacion.get('urgente', False)}\n"
         f"Casos en este correo: {clasificacion.get('cantidad_casos', 1)}\n"
         f"Documentos identificados:\n{docs_texto}\n\n"
-        f"IMPORTANTE: Usa el rol de cada documento para orientar tu analisis. "
-        f"Si hay una peticion_ciudadana y una respuesta_proyectada, "
-        f"compara punto a punto que pidio el ciudadano y que responde la Secretaria.\n\n"
+        f"IMPORTANTE: Usa el rol de cada documento para orientar tu analisis.\n\n"
     )
 
     prompt_final = contexto + prompt
@@ -195,13 +181,12 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
 def extraer_veredicto(texto: str) -> str:
     """
     Extrae el veredicto del análisis jurídico.
-    REQUIERE_REVISION y DESAPROBADO son equivalentes.
+    REQUIERE_REVISION se mapea a DESAPROBADO.
     Solo existen dos estados finales: APROBADO o DESAPROBADO.
     """
     APROBADOS    = {"VEREDICTO: APROBADO"}
     DESAPROBADOS = {"VEREDICTO: DESAPROBADO", "VEREDICTO: REQUIERE_REVISION"}
 
-    # Paso 1 — coincidencia exacta por línea
     for linea in texto.strip().split("\n"):
         linea_norm = linea.strip().upper()
         if linea_norm in APROBADOS:
@@ -209,21 +194,18 @@ def extraer_veredicto(texto: str) -> str:
         if linea_norm in DESAPROBADOS:
             return "DESAPROBADO"
 
-    # Paso 2 — búsqueda laxa en todo el texto
     texto_upper = texto.upper()
     if "VEREDICTO: APROBADO" in texto_upper:
         return "APROBADO"
     if "VEREDICTO: DESAPROBADO" in texto_upper or "VEREDICTO: REQUIERE_REVISION" in texto_upper:
         return "DESAPROBADO"
 
-    # Paso 3 — fallback seguro
     print(f"[WARN] No se encontró veredicto explícito. Últimas 3 líneas: "
           f"{texto.strip().split(chr(10))[-3:]}")
     return "DESAPROBADO"
 
 
 def limpiar_pendientes_vencidos():
-    """Elimina entradas vencidas del acumulador."""
     ahora = time.time()
     with lock_pendientes:
         vencidos = [
@@ -236,36 +218,27 @@ def limpiar_pendientes_vencidos():
 
 
 def procesar_correo(message_id: str, archivos_datos: list) -> dict:
-    """
-    Sube todos los PDFs, ejecuta las 2 llamadas a OpenAI y devuelve resultado.
-    archivos_datos: lista de dicts { "bytes": ..., "nombre": ... }
-    """
     file_ids = []
     try:
-        # Subir todos los PDFs
         for archivo in archivos_datos:
             print(f"Subiendo {archivo['nombre']}...")
             fid = subir_pdf(archivo["bytes"], archivo["nombre"])
             file_ids.append(fid)
             print(f"  → {fid}")
 
-        # Esperar procesamiento
         print("Esperando procesamiento de archivos...")
         for fid in file_ids:
             if not esperar_procesamiento(fid):
                 raise Exception(f"Timeout esperando procesamiento de {fid}")
 
-        # LLAMADA 1: Clasificar
         print("Clasificando documentos...")
         clasificacion = llamada_clasificador(file_ids)
         tipo = clasificacion.get("tipo", "OTRO").strip().upper()
         print(f"Tipo identificado: {tipo} | Dependencia: {clasificacion.get('dependencia')}")
 
-        # LLAMADA 2: Analizar
         print(f"Analizando con prompt: {MAPA_PROMPTS.get(tipo, 'general')}...")
         analisis = llamada_analizador(file_ids, tipo, clasificacion)
 
-        # Extraer veredicto y calcular carpeta destino
         veredicto = extraer_veredicto(analisis)
         carpeta   = MAPA_CARPETAS.get((tipo, veredicto), "OTRO")
         print(f"Veredicto: {veredicto} | Carpeta: {carpeta}")
@@ -293,7 +266,6 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
 
 @app.route("/version", methods=["GET"])
 def version():
-    """Confirma qué versión del código está corriendo en Railway."""
     return jsonify({
         "version":    BUILD_VERSION,
         "build_date": BUILD_DATE,
@@ -312,18 +284,6 @@ def health():
 
 @app.route("/analizar", methods=["POST"])
 def analizar():
-    """
-    Recibe PDFs desde Make, acumula por message_id, y procesa cuando llegan todos.
-
-    Make debe enviar por cada PDF:
-    - Header: X-API-Secret
-    - Form-data:
-        pdf:          <archivo binario>
-        message_id:   <id del correo>
-        total_files:  <cantidad total de adjuntos en el correo>
-    """
-
-    # Autenticación
     if request.headers.get("X-API-Secret") != API_SECRET:
         return jsonify({"error": "No autorizado"}), 401
 
@@ -334,10 +294,8 @@ def analizar():
     message_id  = request.form.get("message_id", "sin_id")
     total_files = int(request.form.get("total_files", 1))
 
-    # Limpiar entradas vencidas antes de procesar
     limpiar_pendientes_vencidos()
 
-    # Acumular archivos
     with lock_pendientes:
         if message_id not in pendientes:
             pendientes[message_id] = {"archivos": [], "timestamp": time.time()}
@@ -352,7 +310,6 @@ def analizar():
 
     print(f"[{message_id}] Recibidos {recibidos}/{total_files} archivos")
 
-    # Si aún faltan archivos, responder 202 y esperar
     if recibidos < total_files:
         return jsonify({
             "status": "acumulando",
@@ -361,7 +318,6 @@ def analizar():
             "message_id": message_id
         }), 202
 
-    # Todos los archivos llegaron → procesar
     with lock_pendientes:
         datos_correo = pendientes.pop(message_id)["archivos"]
 
