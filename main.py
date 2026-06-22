@@ -1,13 +1,16 @@
 """
-MICROSERVICIO JURÍDICO v2.3
+MICROSERVICIO JURÍDICO v2.4
 Arquitectura de doble llamada: Clasificador → Analizador especializado
 Acumulación de PDFs por message_id para recibir múltiples archivos del mismo correo.
 """
 
 import os
+import re
 import time
 import threading
 import json
+import unicodedata
+from datetime import datetime
 from flask import Flask, request, jsonify
 import openai
 from dotenv import load_dotenv
@@ -17,9 +20,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "2.3"
+BUILD_VERSION = "2.4"
 BUILD_DATE    = "2026-05-26"
-BUILD_FIX     = "Módulo retiro forzoso + clasificador actualizado"
+BUILD_FIX     = "Nombre de archivo descriptivo con sujeto e identificación"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -134,6 +137,8 @@ def llamada_clasificador(file_ids: list) -> dict:
             "tipo": "OTRO",
             "dependencia": "DESCONOCIDO",
             "asunto": "No identificado",
+            "sujeto": None,
+            "identificacion": None,
             "radicado": None,
             "vencimiento": None,
             "riesgo": "MEDIO",
@@ -158,6 +163,8 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
         f"Tipo: {clasificacion.get('tipo', 'N/A')}\n"
         f"Dependencia: {clasificacion.get('dependencia', 'N/A')}\n"
         f"Asunto: {clasificacion.get('asunto', 'N/A')}\n"
+        f"Sujeto: {clasificacion.get('sujeto', 'N/A')}\n"
+        f"Identificación: {clasificacion.get('identificacion', 'N/A')}\n"
         f"Radicado: {clasificacion.get('radicado', 'No identificado')}\n"
         f"Vencimiento: {clasificacion.get('vencimiento', 'No identificado')}\n"
         f"Riesgo: {clasificacion.get('riesgo', 'MEDIO')}\n"
@@ -179,11 +186,6 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
 
 
 def extraer_veredicto(texto: str) -> str:
-    """
-    Extrae el veredicto del análisis jurídico.
-    REQUIERE_REVISION se mapea a DESAPROBADO.
-    Solo existen dos estados finales: APROBADO o DESAPROBADO.
-    """
     APROBADOS    = {"VEREDICTO: APROBADO"}
     DESAPROBADOS = {"VEREDICTO: DESAPROBADO", "VEREDICTO: REQUIERE_REVISION"}
 
@@ -203,6 +205,47 @@ def extraer_veredicto(texto: str) -> str:
     print(f"[WARN] No se encontró veredicto explícito. Últimas 3 líneas: "
           f"{texto.strip().split(chr(10))[-3:]}")
     return "DESAPROBADO"
+
+
+def limpiar_texto(texto: str) -> str:
+    """Quita tildes y caracteres especiales para nombres de archivo."""
+    if not texto:
+        return ""
+    # Normaliza tildes (NFD descompone, luego filtra los acentos)
+    texto = unicodedata.normalize('NFD', texto)
+    texto = "".join(c for c in texto if unicodedata.category(c) != 'Mn')
+    # Elimina caracteres no compatibles con nombres de archivo
+    texto = re.sub(r'[<>:"/\\|?*]', '', texto)
+    # Colapsa múltiples espacios
+    texto = re.sub(r'\s+', ' ', texto)
+    return texto.strip()
+
+
+def construir_nombre_archivo(clasificacion: dict, tipo: str, veredicto: str, message_id: str) -> str:
+    """
+    Construye nombre descriptivo del archivo Dropbox.
+    Formato: SUJETO - IDENTIFICACION - TIPO - YYYY-MM-DD.txt
+    Si falta sujeto o identificación, usa fallback con asunto y message_id.
+    """
+    fecha = datetime.now().strftime("%Y-%m-%d")
+    sujeto = limpiar_texto(clasificacion.get("sujeto") or "")
+    identificacion = limpiar_texto(clasificacion.get("identificacion") or "")
+
+    if sujeto and identificacion:
+        nombre = f"{sujeto} - {identificacion} - {tipo} - {fecha}"
+    elif sujeto:
+        nombre = f"{sujeto} - {tipo} - {fecha}"
+    else:
+        # Fallback: usar asunto + parte del message_id
+        asunto = limpiar_texto(clasificacion.get("asunto") or "Sin asunto")[:60]
+        sufijo = message_id[-8:] if message_id else "sinid"
+        nombre = f"{asunto} - {tipo} - {fecha} - {sufijo}"
+
+    # Limitar longitud total (Dropbox máx 255, pero usamos 180 por seguridad)
+    if len(nombre) > 180:
+        nombre = nombre[:180]
+
+    return nombre
 
 
 def limpiar_pendientes_vencidos():
@@ -234,25 +277,29 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
         print("Clasificando documentos...")
         clasificacion = llamada_clasificador(file_ids)
         tipo = clasificacion.get("tipo", "OTRO").strip().upper()
-        print(f"Tipo identificado: {tipo} | Dependencia: {clasificacion.get('dependencia')}")
+        print(f"Tipo: {tipo} | Sujeto: {clasificacion.get('sujeto')} | ID: {clasificacion.get('identificacion')}")
 
         print(f"Analizando con prompt: {MAPA_PROMPTS.get(tipo, 'general')}...")
         analisis = llamada_analizador(file_ids, tipo, clasificacion)
 
         veredicto = extraer_veredicto(analisis)
         carpeta   = MAPA_CARPETAS.get((tipo, veredicto), "OTRO")
-        print(f"Veredicto: {veredicto} | Carpeta: {carpeta}")
+        nombre_archivo = construir_nombre_archivo(clasificacion, tipo, veredicto, message_id)
+        print(f"Veredicto: {veredicto} | Carpeta: {carpeta} | Archivo: {nombre_archivo}")
 
         return {
             "tipo":                tipo,
-            "dependencia":         clasificacion.get("dependencia", "DESCONOCIDO").strip().upper(),
-            "asunto":              clasificacion.get("asunto", "").strip(),
+            "dependencia":         (clasificacion.get("dependencia") or "DESCONOCIDO").strip().upper(),
+            "asunto":              (clasificacion.get("asunto") or "").strip(),
+            "sujeto":              clasificacion.get("sujeto"),
+            "identificacion":      clasificacion.get("identificacion"),
             "radicado":            clasificacion.get("radicado"),
             "vencimiento":         clasificacion.get("vencimiento"),
-            "riesgo":              clasificacion.get("riesgo", "MEDIO").strip().upper(),
+            "riesgo":              (clasificacion.get("riesgo") or "MEDIO").strip().upper(),
             "urgente":             clasificacion.get("urgente", False),
             "veredicto":           veredicto,
             "carpeta":             carpeta,
+            "nombre_archivo":      nombre_archivo,
             "analisis":            analisis,
             "message_id":          message_id,
             "archivos_procesados": len(file_ids)

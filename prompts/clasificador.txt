@@ -40,6 +40,11 @@ METADATOS A EXTRAER
   * GEFI = Gestión Financiera
   * EXTERNO = solicitud de ciudadano, juez o ente de control externo
 - asunto: descripción corta del objeto del documento (máximo 15 palabras)
+- sujeto: nombre completo del docente, ciudadano o accionante del caso. Si no aplica o no se identifica, usar null.
+  * Para RETIRO_FORZOSO, RESOLUCION (sobre docente), tutelas y peticiones: el nombre del docente o ciudadano
+  * Para REQUERIMIENTO de ente de control: el nombre del ente (ejemplo: "CONTRALORIA DISTRITAL")
+  * Siempre en mayúsculas, sin tildes, sin caracteres especiales
+- identificacion: número de cédula del sujeto (sin puntos ni espacios), o número de radicado si no hay sujeto persona. Si no aplica, usar null.
 - radicado: número de radicado si aparece, o null
 - vencimiento: fecha límite de respuesta en formato DD/MM/AAAA, o null
 - riesgo: ALTO | MEDIO | BAJO
@@ -53,6 +58,9 @@ METADATOS A EXTRAER
   * rol: acto_principal | cedula | soporte_vinculacion | soporte_pension | soporte_academico | resolucion_previa | otro
 
 REGLAS IMPORTANTES
+- El campo "sujeto" es muy importante: debe contener el nombre del docente o ciudadano del caso para identificación rápida.
+- El nombre va siempre en MAYUSCULAS, sin tildes (ej: "ALONSA BARRAZA GOMEZ" en vez de "Alonsa Bárraza Gómez").
+- La cédula debe ir sin puntos ni separadores (ej: "22632418" en vez de "22.632.418").
 - Para retiro forzoso: si hay resolución de retiro + cédula, identificarlos correctamente en documentos[].
 - Si hay múltiples resoluciones del mismo tipo en el mismo correo, aumenta cantidad_casos.
 - Si el documento es ilegible o escaneado sin texto, marca tipo: "OTRO" y riesgo: "MEDIO".
@@ -64,13 +72,15 @@ FORMATO DE RESPUESTA (solo JSON):
   "tipo": "RETIRO_FORZOSO",
   "dependencia": "GAD",
   "asunto": "Retiro forzoso docente por cumplimiento de edad",
+  "sujeto": "ALONSA BARRAZA GOMEZ",
+  "identificacion": "22632418",
   "radicado": null,
   "vencimiento": null,
   "riesgo": "BAJO",
   "urgente": false,
   "cantidad_casos": 1,
   "documentos": [
-    {"nombre": "Resolución de retiro forzoso - Argemira Cuentas Escorcia", "rol": "acto_principal"},
-    {"nombre": "Cédula de ciudadanía - Argemira Cuentas Escorcia", "rol": "cedula"}
+    {"nombre": "Resolución de retiro forzoso - Alonsa Barraza Gomez", "rol": "acto_principal"},
+    {"nombre": "Cédula de ciudadanía - Alonsa Barraza Gomez", "rol": "cedula"}
   ]
 }
