@@ -23,9 +23,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.2"
+BUILD_VERSION = "3.3"
 BUILD_DATE    = "2026-07-03"
-BUILD_FIX     = "Módulo de cesantías (educación + remodelación)"
+BUILD_FIX     = "Validaciones defensivas: rango de índices + deduplicación de casos"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -316,6 +316,34 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
         dependencia   = (clasificacion.get("dependencia") or "DESCONOCIDO").strip().upper()
         casos         = clasificacion.get("casos", [])
         huerfanos     = clasificacion.get("documentos_huerfanos", [])
+
+        # ── VALIDACIÓN DEFENSIVA ─────────────────────────────
+        # 1. Filtrar índices fuera de rango en cada caso
+        total_pdfs = len(file_ids)
+        for caso in casos:
+            indices_originales = caso.get("indices_documentos", [])
+            indices_validos    = [i for i in indices_originales if isinstance(i, int) and 0 <= i < total_pdfs]
+            if len(indices_validos) != len(indices_originales):
+                print(f"  [WARN] Corrigiendo índices fuera de rango en caso '{caso.get('sujeto')}': "
+                      f"{indices_originales} → {indices_validos}")
+            caso["indices_documentos"] = indices_validos
+
+        # 2. Deduplicar casos con mismo sujeto+identificación
+        casos_unicos = {}
+        for caso in casos:
+            clave = (caso.get("sujeto"), caso.get("identificacion"))
+            if clave in casos_unicos:
+                # Fusionar índices sin duplicar
+                indices_existentes = set(casos_unicos[clave]["indices_documentos"])
+                indices_nuevos     = set(caso.get("indices_documentos", []))
+                casos_unicos[clave]["indices_documentos"] = sorted(indices_existentes | indices_nuevos)
+                print(f"  [WARN] Fusionando caso duplicado de '{caso.get('sujeto')}'")
+            else:
+                casos_unicos[clave] = caso
+        casos = list(casos_unicos.values())
+
+        # 3. Filtrar casos sin documentos válidos
+        casos = [c for c in casos if c.get("indices_documentos")]
 
         print(f"Tipo general: {tipo_general} | Casos detectados: {len(casos)} | Huérfanos: {len(huerfanos)}")
 
