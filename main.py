@@ -1,7 +1,7 @@
 """
-MICROSERVICIO JURÍDICO v2.4
-Arquitectura de doble llamada: Clasificador → Analizador especializado
-Acumulación de PDFs por message_id para recibir múltiples archivos del mismo correo.
+MICROSERVICIO JURÍDICO v3.0
+Arquitectura multi-caso: un correo puede contener varios casos del mismo tipo.
+Flujo: Clasificador identifica N casos → Analizador se ejecuta N veces → Devuelve resultados[].
 """
 
 import os
@@ -20,9 +20,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "2.4"
+BUILD_VERSION = "3.0"
 BUILD_DATE    = "2026-05-26"
-BUILD_FIX     = "Nombre de archivo descriptivo con sujeto e identificación"
+BUILD_FIX     = "Procesamiento multi-caso por correo"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -108,6 +108,7 @@ def construir_content(file_ids: list, texto_prompt: str) -> list:
 
 
 def llamada_clasificador(file_ids: list) -> dict:
+    """Clasifica el correo y detecta cuántos casos hay. Devuelve estructura multi-caso."""
     prompt = cargar_prompt("clasificador")
     content = construir_content(file_ids, prompt)
 
@@ -132,27 +133,32 @@ def llamada_clasificador(file_ids: list) -> dict:
     try:
         return json.loads(texto)
     except Exception:
-        print(f"[WARN] No se pudo parsear clasificación: {texto}")
+        print(f"[WARN] No se pudo parsear clasificación: {texto[:500]}")
         return {
             "tipo": "OTRO",
             "dependencia": "DESCONOCIDO",
-            "asunto": "No identificado",
-            "sujeto": None,
-            "identificacion": None,
-            "radicado": None,
-            "vencimiento": None,
-            "riesgo": "MEDIO",
-            "urgente": False,
             "cantidad_casos": 1,
-            "documentos": []
+            "casos": [{
+                "sujeto": None,
+                "identificacion": None,
+                "asunto": "No identificado",
+                "radicado": None,
+                "vencimiento": None,
+                "riesgo": "MEDIO",
+                "urgente": False,
+                "indices_documentos": list(range(len(file_ids))),
+                "documentos": []
+            }],
+            "documentos_huerfanos": []
         }
 
 
-def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
+def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general: str, dependencia: str) -> str:
+    """Analiza UN caso específico con sus PDFs. file_ids_caso es solo los PDFs de ese caso."""
     nombre_prompt = MAPA_PROMPTS.get(tipo, "general")
     prompt = cargar_prompt(nombre_prompt)
 
-    docs = clasificacion.get('documentos', [])
+    docs = caso.get('documentos', [])
     docs_texto = "\n".join(
         f"  - {d.get('nombre','?')} -> {d.get('rol','desconocido')}"
         for d in docs
@@ -160,22 +166,22 @@ def llamada_analizador(file_ids: list, tipo: str, clasificacion: dict) -> str:
 
     contexto = (
         f"[CONTEXTO PREVIO DE CLASIFICACION]\n"
-        f"Tipo: {clasificacion.get('tipo', 'N/A')}\n"
-        f"Dependencia: {clasificacion.get('dependencia', 'N/A')}\n"
-        f"Asunto: {clasificacion.get('asunto', 'N/A')}\n"
-        f"Sujeto: {clasificacion.get('sujeto', 'N/A')}\n"
-        f"Identificación: {clasificacion.get('identificacion', 'N/A')}\n"
-        f"Radicado: {clasificacion.get('radicado', 'No identificado')}\n"
-        f"Vencimiento: {clasificacion.get('vencimiento', 'No identificado')}\n"
-        f"Riesgo: {clasificacion.get('riesgo', 'MEDIO')}\n"
-        f"Urgente: {clasificacion.get('urgente', False)}\n"
-        f"Casos en este correo: {clasificacion.get('cantidad_casos', 1)}\n"
-        f"Documentos identificados:\n{docs_texto}\n\n"
-        f"IMPORTANTE: Usa el rol de cada documento para orientar tu analisis.\n\n"
+        f"Tipo: {tipo_general}\n"
+        f"Dependencia: {dependencia}\n"
+        f"Asunto: {caso.get('asunto', 'N/A')}\n"
+        f"Sujeto: {caso.get('sujeto', 'N/A')}\n"
+        f"Identificación: {caso.get('identificacion', 'N/A')}\n"
+        f"Radicado: {caso.get('radicado', 'No identificado')}\n"
+        f"Vencimiento: {caso.get('vencimiento', 'No identificado')}\n"
+        f"Riesgo: {caso.get('riesgo', 'MEDIO')}\n"
+        f"Urgente: {caso.get('urgente', False)}\n"
+        f"Documentos de este caso:\n{docs_texto}\n\n"
+        f"IMPORTANTE: Analiza SOLO el caso de {caso.get('sujeto', 'este docente/ciudadano')}. "
+        f"Los PDFs que recibes son los que pertenecen exclusivamente a este caso.\n\n"
     )
 
     prompt_final = contexto + prompt
-    content = construir_content(file_ids, prompt_final)
+    content = construir_content(file_ids_caso, prompt_final)
 
     response = client.chat.completions.create(
         model=MODEL,
@@ -202,8 +208,7 @@ def extraer_veredicto(texto: str) -> str:
     if "VEREDICTO: DESAPROBADO" in texto_upper or "VEREDICTO: REQUIERE_REVISION" in texto_upper:
         return "DESAPROBADO"
 
-    print(f"[WARN] No se encontró veredicto explícito. Últimas 3 líneas: "
-          f"{texto.strip().split(chr(10))[-3:]}")
+    print(f"[WARN] No se encontró veredicto explícito.")
     return "DESAPROBADO"
 
 
@@ -211,41 +216,59 @@ def limpiar_texto(texto: str) -> str:
     """Quita tildes y caracteres especiales para nombres de archivo."""
     if not texto:
         return ""
-    # Normaliza tildes (NFD descompone, luego filtra los acentos)
     texto = unicodedata.normalize('NFD', texto)
     texto = "".join(c for c in texto if unicodedata.category(c) != 'Mn')
-    # Elimina caracteres no compatibles con nombres de archivo
     texto = re.sub(r'[<>:"/\\|?*]', '', texto)
-    # Colapsa múltiples espacios
     texto = re.sub(r'\s+', ' ', texto)
     return texto.strip()
 
 
-def construir_nombre_archivo(clasificacion: dict, tipo: str, veredicto: str, message_id: str) -> str:
-    """
-    Construye nombre descriptivo del archivo Dropbox.
-    Formato: SUJETO - IDENTIFICACION - TIPO - YYYY-MM-DD.txt
-    Si falta sujeto o identificación, usa fallback con asunto y message_id.
-    """
+def construir_nombre_archivo(caso: dict, tipo: str, message_id: str) -> str:
+    """Formato: SUJETO - IDENTIFICACION - TIPO - YYYY-MM-DD"""
     fecha = datetime.now().strftime("%Y-%m-%d")
-    sujeto = limpiar_texto(clasificacion.get("sujeto") or "")
-    identificacion = limpiar_texto(clasificacion.get("identificacion") or "")
+    sujeto = limpiar_texto(caso.get("sujeto") or "")
+    identificacion = limpiar_texto(caso.get("identificacion") or "")
 
     if sujeto and identificacion:
         nombre = f"{sujeto} - {identificacion} - {tipo} - {fecha}"
     elif sujeto:
         nombre = f"{sujeto} - {tipo} - {fecha}"
     else:
-        # Fallback: usar asunto + parte del message_id
-        asunto = limpiar_texto(clasificacion.get("asunto") or "Sin asunto")[:60]
+        asunto = limpiar_texto(caso.get("asunto") or "Sin asunto")[:60]
         sufijo = message_id[-8:] if message_id else "sinid"
         nombre = f"{asunto} - {tipo} - {fecha} - {sufijo}"
 
-    # Limitar longitud total (Dropbox máx 255, pero usamos 180 por seguridad)
     if len(nombre) > 180:
         nombre = nombre[:180]
-
     return nombre
+
+
+def construir_advertencia_huerfanos(huerfanos: list, message_id: str) -> dict:
+    """Genera un archivo de advertencia con los PDFs no emparejados."""
+    fecha = datetime.now().strftime("%Y-%m-%d")
+
+    contenido = f"ADVERTENCIA - DOCUMENTOS NO EMPAREJADOS\n"
+    contenido += f"Correo: {message_id}\n"
+    contenido += f"Fecha: {fecha}\n\n"
+    contenido += f"Se detectaron {len(huerfanos)} documento(s) que no pudieron asociarse a ningún caso:\n\n"
+
+    for h in huerfanos:
+        contenido += f"- {h.get('nombre', 'Documento sin nombre')}\n"
+        contenido += f"  Razón: {h.get('razon', 'No especificada')}\n\n"
+
+    contenido += "\nSe recomienda revisar el correo original y enviar los documentos completos si es necesario.\n"
+
+    return {
+        "tipo":            "ADVERTENCIA",
+        "carpeta":         "ADVERTENCIA",
+        "nombre_archivo":  f"ADVERTENCIA - {message_id[-8:]} - {fecha}",
+        "sujeto":          None,
+        "identificacion":  None,
+        "veredicto":       "ADVERTENCIA",
+        "analisis":        contenido,
+        "message_id":      message_id,
+        "cantidad_huerfanos": len(huerfanos)
+    }
 
 
 def limpiar_pendientes_vencidos():
@@ -261,48 +284,87 @@ def limpiar_pendientes_vencidos():
 
 
 def procesar_correo(message_id: str, archivos_datos: list) -> dict:
+    """
+    Procesa un correo completo con posiblemente varios casos.
+    Devuelve un dict con 'resultados' que es lista de todos los análisis + advertencia si aplica.
+    """
     file_ids = []
     try:
+        # Subir todos los PDFs
         for archivo in archivos_datos:
             print(f"Subiendo {archivo['nombre']}...")
             fid = subir_pdf(archivo["bytes"], archivo["nombre"])
             file_ids.append(fid)
             print(f"  → {fid}")
 
+        # Esperar procesamiento
         print("Esperando procesamiento de archivos...")
         for fid in file_ids:
             if not esperar_procesamiento(fid):
                 raise Exception(f"Timeout esperando procesamiento de {fid}")
 
+        # LLAMADA 1: Clasificar y detectar casos
         print("Clasificando documentos...")
         clasificacion = llamada_clasificador(file_ids)
-        tipo = clasificacion.get("tipo", "OTRO").strip().upper()
-        print(f"Tipo: {tipo} | Sujeto: {clasificacion.get('sujeto')} | ID: {clasificacion.get('identificacion')}")
+        tipo_general  = clasificacion.get("tipo", "OTRO").strip().upper()
+        dependencia   = (clasificacion.get("dependencia") or "DESCONOCIDO").strip().upper()
+        casos         = clasificacion.get("casos", [])
+        huerfanos     = clasificacion.get("documentos_huerfanos", [])
 
-        print(f"Analizando con prompt: {MAPA_PROMPTS.get(tipo, 'general')}...")
-        analisis = llamada_analizador(file_ids, tipo, clasificacion)
+        print(f"Tipo general: {tipo_general} | Casos detectados: {len(casos)} | Huérfanos: {len(huerfanos)}")
 
-        veredicto = extraer_veredicto(analisis)
-        carpeta   = MAPA_CARPETAS.get((tipo, veredicto), "OTRO")
-        nombre_archivo = construir_nombre_archivo(clasificacion, tipo, veredicto, message_id)
-        print(f"Veredicto: {veredicto} | Carpeta: {carpeta} | Archivo: {nombre_archivo}")
+        resultados = []
+
+        # LLAMADA 2..N: Analizar cada caso por separado
+        for i, caso in enumerate(casos, start=1):
+            sujeto = caso.get('sujeto', 'sin_nombre')
+            print(f"[{i}/{len(casos)}] Analizando caso de: {sujeto}")
+
+            # Extraer solo los file_ids de este caso
+            indices = caso.get("indices_documentos", [])
+            file_ids_caso = [file_ids[idx] for idx in indices if 0 <= idx < len(file_ids)]
+
+            if not file_ids_caso:
+                print(f"  [WARN] Caso sin documentos válidos, saltando: {sujeto}")
+                continue
+
+            # Ejecutar análisis
+            analisis  = llamada_analizador(file_ids_caso, tipo_general, caso, tipo_general, dependencia)
+            veredicto = extraer_veredicto(analisis)
+            carpeta   = MAPA_CARPETAS.get((tipo_general, veredicto), "OTRO")
+            nombre    = construir_nombre_archivo(caso, tipo_general, message_id)
+
+            print(f"  Veredicto: {veredicto} | Carpeta: {carpeta}")
+
+            resultados.append({
+                "tipo":            tipo_general,
+                "dependencia":     dependencia,
+                "asunto":          (caso.get("asunto") or "").strip(),
+                "sujeto":          caso.get("sujeto"),
+                "identificacion":  caso.get("identificacion"),
+                "radicado":        caso.get("radicado"),
+                "vencimiento":     caso.get("vencimiento"),
+                "riesgo":          (caso.get("riesgo") or "MEDIO").strip().upper(),
+                "urgente":         caso.get("urgente", False),
+                "veredicto":       veredicto,
+                "carpeta":         carpeta,
+                "nombre_archivo":  nombre,
+                "analisis":        analisis,
+                "message_id":      message_id
+            })
+
+        # Agregar advertencia si hay huérfanos
+        if huerfanos:
+            print(f"[!] Generando advertencia con {len(huerfanos)} documentos huérfanos")
+            resultados.append(construir_advertencia_huerfanos(huerfanos, message_id))
 
         return {
-            "tipo":                tipo,
-            "dependencia":         (clasificacion.get("dependencia") or "DESCONOCIDO").strip().upper(),
-            "asunto":              (clasificacion.get("asunto") or "").strip(),
-            "sujeto":              clasificacion.get("sujeto"),
-            "identificacion":      clasificacion.get("identificacion"),
-            "radicado":            clasificacion.get("radicado"),
-            "vencimiento":         clasificacion.get("vencimiento"),
-            "riesgo":              (clasificacion.get("riesgo") or "MEDIO").strip().upper(),
-            "urgente":             clasificacion.get("urgente", False),
-            "veredicto":           veredicto,
-            "carpeta":             carpeta,
-            "nombre_archivo":      nombre_archivo,
-            "analisis":            analisis,
-            "message_id":          message_id,
-            "archivos_procesados": len(file_ids)
+            "message_id":       message_id,
+            "tipo_general":     tipo_general,
+            "cantidad_casos":   len(casos),
+            "cantidad_huerfanos": len(huerfanos),
+            "archivos_procesados": len(file_ids),
+            "resultados":       resultados
         }
 
     finally:
