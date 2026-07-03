@@ -23,9 +23,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.1"
-BUILD_DATE    = "2026-05-26"
-BUILD_FIX     = "Zona horaria Colombia + multi-caso"
+BUILD_VERSION = "3.2"
+BUILD_DATE    = "2026-07-03"
+BUILD_FIX     = "Módulo de cesantías (educación + remodelación)"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -43,6 +43,7 @@ TTL_SEGUNDOS = 300
 MAPA_PROMPTS = {
     "RESOLUCION":     "resolucion",
     "RETIRO_FORZOSO": "retiro_forzoso",
+    "CESANTIAS":      "cesantias",
     "TUTELA":         "tutela",
     "PETICION":       "peticion",
     "REQUERIMIENTO":  "requerimiento",
@@ -56,6 +57,8 @@ MAPA_CARPETAS = {
     ("RESOLUCION",     "DESAPROBADO"): "RESOLUCION_DESAPROBADO",
     ("RETIRO_FORZOSO", "APROBADO"):    "RETIRO_FORZOSO_APROBADO",
     ("RETIRO_FORZOSO", "DESAPROBADO"): "RETIRO_FORZOSO_DESAPROBADO",
+    ("CESANTIAS",      "APROBADO"):    "CESANTIAS_APROBADO",
+    ("CESANTIAS",      "DESAPROBADO"): "CESANTIAS_DESAPROBADO",
     ("TUTELA",         "APROBADO"):    "TUTELA_APROBADO",
     ("TUTELA",         "DESAPROBADO"): "TUTELA_DESAPROBADO",
     ("PETICION",       "APROBADO"):    "PETICION_APROBADO",

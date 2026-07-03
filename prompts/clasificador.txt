@@ -7,6 +7,9 @@ TIPOS DISPONIBLES Y CUÁNDO USARLOS
 RETIRO_FORZOSO
 Usar cuando: hay una o varias resoluciones que retiran del servicio a docentes por cumplimiento de la edad de retiro forzoso (70 años). Palabras clave: "retiro forzoso", "edad de retiro", "Ley 1821 de 2016".
 
+CESANTIAS
+Usar cuando: hay uno o varios actos administrativos de reconocimiento de cesantías parciales o definitivas a docentes. Palabras clave: "cesantía", "cesantías", "cesantía parcial", "cesantía definitiva", "reconocimiento de cesantía", "auxilio de cesantía", "anticipo de cesantías", "pago de cesantías". Puede ser para educación (matrícula, semestre, universidad) o para remodelación de vivienda (contrato de obra, remodelación, mejoras).
+
 TUTELA
 Usar cuando: hay una o varias acciones de tutela, fallos, autos admisorios o incidentes de desacato.
 
@@ -28,57 +31,61 @@ INSTRUCCIONES
 
 1. Lee todos los documentos adjuntos.
 2. Identifica el tipo general del correo (uno solo para todo).
-3. Identifica cuántos casos distintos hay en el correo (uno por cada docente/ciudadano/expediente).
-4. Para cada caso, identifica qué documentos le pertenecen (por ejemplo: resolución de Alonsa + cédula de Alonsa = 1 caso).
+3. Identifica cuántos casos distintos hay en el correo (uno por cada docente/expediente).
+4. Para cada caso, identifica qué documentos le pertenecen agrupándolos por docente:
+   - Para RETIRO_FORZOSO: resolución + cédula del mismo docente = 1 caso.
+   - Para CESANTIAS: acto + cédula del docente + soporte específico (educativo o contrato de obra) + certificación bancaria + matrícula inmobiliaria si aplica + cédula del contratista si aplica = 1 caso.
 5. Los índices de los documentos van del 0 al N-1, en el mismo orden en que llegaron.
 6. Si un documento no se puede emparejar con ningún caso, márcalo como "huérfano".
+
+REGLA CRÍTICA PARA CESANTIAS DE REMODELACIÓN:
+En estos casos suele venir una segunda cédula que NO es del docente sino del CONTRATISTA (con tarjeta profesional adjunta o mencionada en el contrato). Esta cédula del contratista PERTENECE al mismo caso que el docente. NO es un huérfano. Debe agruparse con los otros documentos del docente que la contrató.
 
 FORMATO DE RESPUESTA (solo JSON, sin markdown, sin explicaciones):
 
 {
-  "tipo": "RETIRO_FORZOSO",
+  "tipo": "CESANTIAS",
   "dependencia": "GAD",
-  "cantidad_casos": 2,
+  "cantidad_casos": 1,
   "casos": [
     {
-      "sujeto": "ALONSA BARRAZA GOMEZ",
-      "identificacion": "22632418",
-      "asunto": "Retiro forzoso docente por cumplimiento de edad",
+      "sujeto": "FELIPE CARRILLO RODRIGUEZ",
+      "identificacion": "1051816210",
+      "asunto": "Cesantía parcial para remodelación de vivienda",
       "radicado": null,
       "vencimiento": null,
       "riesgo": "BAJO",
       "urgente": false,
-      "indices_documentos": [0, 1],
+      "indices_documentos": [0, 1, 2, 3, 4, 5],
       "documentos": [
-        {"nombre": "Resolución de retiro forzoso - Alonsa Barraza", "rol": "acto_principal", "indice": 0},
-        {"nombre": "Cédula de ciudadanía - Alonsa Barraza", "rol": "cedula", "indice": 1}
-      ]
-    },
-    {
-      "sujeto": "ARGEMIRA CUENTAS ESCORCIA",
-      "identificacion": "22632164",
-      "asunto": "Retiro forzoso docente por cumplimiento de edad",
-      "radicado": null,
-      "vencimiento": null,
-      "riesgo": "BAJO",
-      "urgente": false,
-      "indices_documentos": [2, 3],
-      "documentos": [
-        {"nombre": "Resolución de retiro forzoso - Argemira Cuentas", "rol": "acto_principal", "indice": 2},
-        {"nombre": "Cédula de ciudadanía - Argemira Cuentas", "rol": "cedula", "indice": 3}
+        {"nombre": "Acto administrativo de cesantía - Felipe Carrillo", "rol": "acto_principal", "indice": 0},
+        {"nombre": "Cédula de ciudadanía - Felipe Carrillo (docente)", "rol": "cedula_docente", "indice": 1},
+        {"nombre": "Contrato de obra", "rol": "contrato_obra", "indice": 2},
+        {"nombre": "Matrícula inmobiliaria", "rol": "matricula_inmobiliaria", "indice": 3},
+        {"nombre": "Certificación bancaria", "rol": "certificacion_bancaria", "indice": 4},
+        {"nombre": "Cédula y tarjeta profesional Juan Carlos (contratista)", "rol": "cedula_contratista", "indice": 5}
       ]
     }
   ],
   "documentos_huerfanos": []
 }
 
+ROLES POSIBLES POR TIPO:
+
+Para RETIRO_FORZOSO:
+- acto_principal, cedula, soporte_pension
+
+Para CESANTIAS:
+- acto_principal, cedula_docente, soporte_educativo, contrato_obra, matricula_inmobiliaria, certificacion_bancaria, cedula_contratista, tarjeta_profesional, registro_civil_hijo, otro
+
+Para otros tipos:
+- acto_principal, cedula, soporte, otro
+
 REGLAS ADICIONALES
 
 - El campo "sujeto" es OBLIGATORIO: nombre completo del docente/ciudadano en MAYÚSCULAS, sin tildes.
-- El campo "identificacion" es la cédula sin puntos ni espacios (ejemplo: "22632418").
-- Los "indices_documentos" son la lista de índices que pertenecen a ese caso (usados para pasarle solo esos PDFs al analizador).
-- Si hay documentos que no se pueden emparejar con ningún caso (ejemplo: una cédula suelta sin resolución), agrégalos a "documentos_huerfanos" con este formato:
-  {"nombre": "Cédula sin resolución asociada", "indice": 4, "razon": "No se encontró resolución que corresponda a este documento"}
+- El campo "identificacion" es la cédula del DOCENTE sin puntos ni espacios (nunca la del contratista).
+- Los "indices_documentos" incluyen TODOS los documentos del caso (incluida cédula del contratista si aplica).
 - Dependencia posibles: GAD | IVC | COBERTURA | CALIDAD | GEFI | EXTERNO | DESCONOCIDO
 - Riesgo posible: ALTO | MEDIO | BAJO
 - Devuelve ÚNICAMENTE el JSON, sin texto adicional, sin bloques markdown.
