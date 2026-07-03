@@ -23,9 +23,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.4"
+BUILD_VERSION = "3.5"
 BUILD_DATE    = "2026-07-03"
-BUILD_FIX     = "Módulo IVC (licencias ETDH)"
+BUILD_FIX     = "IVC ampliado: cambio de titularidad + validación cruzada de identidad"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")

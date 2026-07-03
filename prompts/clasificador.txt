@@ -48,10 +48,11 @@ INSTRUCCIONES
 REGLA CRÍTICA PARA IVC:
 En trámites de IVC (licencias ETDH), un caso NO tiene "docente" sino una INSTITUCIÓN EDUCATIVA. En estos casos:
 - El campo "sujeto" debe ser el NOMBRE DE LA INSTITUCIÓN EDUCATIVA en mayúsculas sin tildes.
-- El campo "identificacion" debe ser el NIT de la persona jurídica (sin puntos, sin guiones, ejemplo "9003595821").
-- Un caso IVC incluye: acto administrativo + certificado de Cámara de Comercio + (opcional) acta de Consejo Directivo + (opcional) PEI ajustado + otros soportes.
-- Todos los documentos de UNA institución van en UN solo caso.
+- El campo "identificacion" debe ser el NIT de la persona jurídica titular (sin puntos, sin guiones, ejemplo "9003595821"). Si hay cambio de titularidad, usar el NIT del NUEVO titular.
+- Un caso IVC incluye TODOS los soportes del trámite: acto administrativo + certificados de Cámara de Comercio (pueden ser dos: titular anterior y nuevo) + contrato de compraventa o cesión + cédulas de representantes legales + RUT + acta de Consejo Directivo + PEI + resolución de licencia original + solicitud.
+- TODOS estos documentos van en UN solo caso (es un solo trámite de una institución, aunque haya muchos PDFs).
 - La dependencia SIEMPRE es IVC.
+- NO separes los documentos de un mismo trámite IVC en varios casos. Un expediente IVC = un caso, aunque tenga 8 o 10 documentos.
 
 REGLA CRÍTICA PARA CESANTIAS DE REMODELACIÓN:
 En estos casos suele venir una segunda cédula que NO es del docente sino del CONTRATISTA (con tarjeta profesional adjunta o mencionada en el contrato). Esta cédula del contratista PERTENECE al mismo caso del docente que lo contrató. Debe agruparse con los otros documentos del docente. NO es un caso separado ni un huérfano.
@@ -99,7 +100,7 @@ Para CESANTIAS:
 - acto_principal, cedula_docente, soporte_educativo, contrato_obra, matricula_inmobiliaria, certificacion_bancaria, cedula_contratista, tarjeta_profesional, registro_civil_hijo, otro
 
 Para IVC:
-- acto_principal, certificado_camara_comercio, acta_consejo_directivo, pei_ajustado, resolucion_licencia_original, solicitud_modificacion, formato_seivp02r16, otro
+- acto_principal, certificado_camara_comercio, certificado_camara_titular_anterior, certificado_camara_titular_nuevo, contrato_compraventa, cesion_derechos, acta_consejo_directivo, pei_ajustado, resolucion_licencia_original, solicitud_modificacion, formato_seivp02r16, cedula_representante_legal, rut, otro
 
 Para otros tipos:
 - acto_principal, cedula, soporte, otro
