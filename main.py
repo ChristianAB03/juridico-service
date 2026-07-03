@@ -23,9 +23,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.3"
+BUILD_VERSION = "3.4"
 BUILD_DATE    = "2026-07-03"
-BUILD_FIX     = "Validaciones defensivas: rango de índices + deduplicación de casos"
+BUILD_FIX     = "Módulo IVC (licencias ETDH)"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -44,6 +44,7 @@ MAPA_PROMPTS = {
     "RESOLUCION":     "resolucion",
     "RETIRO_FORZOSO": "retiro_forzoso",
     "CESANTIAS":      "cesantias",
+    "IVC":            "ivc",
     "TUTELA":         "tutela",
     "PETICION":       "peticion",
     "REQUERIMIENTO":  "requerimiento",
@@ -59,6 +60,8 @@ MAPA_CARPETAS = {
     ("RETIRO_FORZOSO", "DESAPROBADO"): "RETIRO_FORZOSO_DESAPROBADO",
     ("CESANTIAS",      "APROBADO"):    "CESANTIAS_APROBADO",
     ("CESANTIAS",      "DESAPROBADO"): "CESANTIAS_DESAPROBADO",
+    ("IVC",            "APROBADO"):    "IVC_APROBADO",
+    ("IVC",            "DESAPROBADO"): "IVC_DESAPROBADO",
     ("TUTELA",         "APROBADO"):    "TUTELA_APROBADO",
     ("TUTELA",         "DESAPROBADO"): "TUTELA_DESAPROBADO",
     ("PETICION",       "APROBADO"):    "PETICION_APROBADO",

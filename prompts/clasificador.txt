@@ -16,6 +16,9 @@ Usar cuando: hay resoluciones que retiran del servicio a docentes por cumplimien
 CESANTIAS
 Usar cuando: hay actos administrativos de reconocimiento de cesantías a docentes. Palabras clave: "cesantía", "cesantías", "cesantía parcial", "reconocimiento de cesantía", "auxilio de cesantía", "anticipo de cesantías". Puede ser para educación (matrícula, semestre, universidad) o para remodelación de vivienda (contrato de obra, remodelación, mejoras).
 
+IVC
+Usar cuando: hay actos administrativos de la oficina de Inspección, Vigilancia y Control relacionados con instituciones de Educación para el Trabajo y Desarrollo Humano (ETDH). Palabras clave: "licencia de funcionamiento", "ETDH", "Educación para el Trabajo", "modificación de licencia", "registro de novedad", "representante legal", "razón social", "cambio de nombre del establecimiento", "IVC", "SE-IV-P02-R16". La dependencia siempre es IVC (no GAD).
+
 TUTELA
 Usar cuando: hay acciones de tutela, fallos, autos admisorios o incidentes de desacato.
 
@@ -41,6 +44,14 @@ INSTRUCCIONES
 4. Para cada docente, agrupa TODOS sus documentos en un solo caso.
 5. Los índices que asignes deben estar en el rango [0, total_pdfs - 1]. Nunca fuera de ese rango.
 6. Si un documento no se puede emparejar con ningún caso, márcalo como "huérfano".
+
+REGLA CRÍTICA PARA IVC:
+En trámites de IVC (licencias ETDH), un caso NO tiene "docente" sino una INSTITUCIÓN EDUCATIVA. En estos casos:
+- El campo "sujeto" debe ser el NOMBRE DE LA INSTITUCIÓN EDUCATIVA en mayúsculas sin tildes.
+- El campo "identificacion" debe ser el NIT de la persona jurídica (sin puntos, sin guiones, ejemplo "9003595821").
+- Un caso IVC incluye: acto administrativo + certificado de Cámara de Comercio + (opcional) acta de Consejo Directivo + (opcional) PEI ajustado + otros soportes.
+- Todos los documentos de UNA institución van en UN solo caso.
+- La dependencia SIEMPRE es IVC.
 
 REGLA CRÍTICA PARA CESANTIAS DE REMODELACIÓN:
 En estos casos suele venir una segunda cédula que NO es del docente sino del CONTRATISTA (con tarjeta profesional adjunta o mencionada en el contrato). Esta cédula del contratista PERTENECE al mismo caso del docente que lo contrató. Debe agruparse con los otros documentos del docente. NO es un caso separado ni un huérfano.
@@ -86,6 +97,9 @@ Para RETIRO_FORZOSO:
 
 Para CESANTIAS:
 - acto_principal, cedula_docente, soporte_educativo, contrato_obra, matricula_inmobiliaria, certificacion_bancaria, cedula_contratista, tarjeta_profesional, registro_civil_hijo, otro
+
+Para IVC:
+- acto_principal, certificado_camara_comercio, acta_consejo_directivo, pei_ajustado, resolucion_licencia_original, solicitud_modificacion, formato_seivp02r16, otro
 
 Para otros tipos:
 - acto_principal, cedula, soporte, otro
