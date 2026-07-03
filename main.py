@@ -10,7 +10,10 @@ import time
 import threading
 import json
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# Zona horaria de Colombia (UTC-5)
+TZ_COLOMBIA = timezone(timedelta(hours=-5))
 from flask import Flask, request, jsonify
 import openai
 from dotenv import load_dotenv
@@ -20,9 +23,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.0"
+BUILD_VERSION = "3.1"
 BUILD_DATE    = "2026-05-26"
-BUILD_FIX     = "Procesamiento multi-caso por correo"
+BUILD_FIX     = "Zona horaria Colombia + multi-caso"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -225,7 +228,7 @@ def limpiar_texto(texto: str) -> str:
 
 def construir_nombre_archivo(caso: dict, tipo: str, message_id: str) -> str:
     """Formato: SUJETO - IDENTIFICACION - TIPO - YYYY-MM-DD"""
-    fecha = datetime.now().strftime("%Y-%m-%d")
+    fecha = datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
     sujeto = limpiar_texto(caso.get("sujeto") or "")
     identificacion = limpiar_texto(caso.get("identificacion") or "")
 
@@ -245,7 +248,7 @@ def construir_nombre_archivo(caso: dict, tipo: str, message_id: str) -> str:
 
 def construir_advertencia_huerfanos(huerfanos: list, message_id: str) -> dict:
     """Genera un archivo de advertencia con los PDFs no emparejados."""
-    fecha = datetime.now().strftime("%Y-%m-%d")
+    fecha = datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
 
     contenido = f"ADVERTENCIA - DOCUMENTOS NO EMPAREJADOS\n"
     contenido += f"Correo: {message_id}\n"
@@ -322,7 +325,9 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
 
             # Extraer solo los file_ids de este caso
             indices = caso.get("indices_documentos", [])
+            print(f"  Indices del clasificador: {indices} (total PDFs disponibles: {len(file_ids)})")
             file_ids_caso = [file_ids[idx] for idx in indices if 0 <= idx < len(file_ids)]
+            print(f"  PDFs asignados a este caso: {len(file_ids_caso)}")
 
             if not file_ids_caso:
                 print(f"  [WARN] Caso sin documentos válidos, saltando: {sujeto}")
