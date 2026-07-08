@@ -19,6 +19,9 @@ Usar cuando: hay actos administrativos de reconocimiento de cesantías a docente
 IVC
 Usar cuando: hay actos administrativos de la oficina de Inspección, Vigilancia y Control relacionados con instituciones de Educación para el Trabajo y Desarrollo Humano (ETDH). Palabras clave: "licencia de funcionamiento", "ETDH", "Educación para el Trabajo", "modificación de licencia", "registro de novedad", "representante legal", "razón social", "cambio de nombre del establecimiento", "IVC", "SE-IV-P02-R16". La dependencia siempre es IVC (no GAD).
 
+ESCALAFON
+Usar cuando: hay actos administrativos relacionados con el escalafón docente. Palabras clave: "escalafón", "ascenso", "reubicación salarial", "reubicación de nivel", "inscripción en escalafón", "reconocimiento salarial", "grado en el escalafón", "nivel salarial", "evaluación de competencias", "Decreto 1278", "Decreto 2277", "Decreto 953 de 2025", "asignación básica mensual por título". La dependencia es GAD.
+
 TUTELA
 Usar cuando: hay acciones de tutela, fallos, autos admisorios o incidentes de desacato.
 
@@ -101,6 +104,9 @@ Para CESANTIAS:
 
 Para IVC:
 - acto_principal, certificado_camara_comercio, certificado_camara_titular_anterior, certificado_camara_titular_nuevo, contrato_compraventa, cesion_derechos, acta_consejo_directivo, pei_ajustado, resolucion_licencia_original, solicitud_modificacion, formato_seivp02r16, cedula_representante_legal, rut, otro
+
+Para ESCALAFON:
+- acto_principal, cedula, solicitud_docente, titulo_academico, acta_grado, certificado_escalafon, resultado_evaluacion_competencias, certificado_laboral, historia_laboral, acto_nombramiento, liquidacion_efectos_fiscales, recurso_interpuesto, otro
 
 Para otros tipos:
 - acto_principal, cedula, soporte, otro

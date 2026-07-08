@@ -23,9 +23,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.5"
+BUILD_VERSION = "3.6"
 BUILD_DATE    = "2026-07-03"
-BUILD_FIX     = "IVC ampliado: cambio de titularidad + validación cruzada de identidad"
+BUILD_FIX     = "Módulo escalafón docente (ascenso/reubicación/reconocimiento)"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -45,6 +45,7 @@ MAPA_PROMPTS = {
     "RETIRO_FORZOSO": "retiro_forzoso",
     "CESANTIAS":      "cesantias",
     "IVC":            "ivc",
+    "ESCALAFON":      "escalafon",
     "TUTELA":         "tutela",
     "PETICION":       "peticion",
     "REQUERIMIENTO":  "requerimiento",
@@ -62,6 +63,8 @@ MAPA_CARPETAS = {
     ("CESANTIAS",      "DESAPROBADO"): "CESANTIAS_DESAPROBADO",
     ("IVC",            "APROBADO"):    "IVC_APROBADO",
     ("IVC",            "DESAPROBADO"): "IVC_DESAPROBADO",
+    ("ESCALAFON",      "APROBADO"):    "ESCALAFON_APROBADO",
+    ("ESCALAFON",      "DESAPROBADO"): "ESCALAFON_DESAPROBADO",
     ("TUTELA",         "APROBADO"):    "TUTELA_APROBADO",
     ("TUTELA",         "DESAPROBADO"): "TUTELA_DESAPROBADO",
     ("PETICION",       "APROBADO"):    "PETICION_APROBADO",
