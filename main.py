@@ -23,9 +23,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.6"
-BUILD_DATE    = "2026-07-03"
-BUILD_FIX     = "Módulo escalafón docente (ascenso/reubicación/reconocimiento)"
+BUILD_VERSION = "3.7"
+BUILD_DATE    = "2026-07-31"
+BUILD_FIX     = "Escalafon: propagar subtipo (inscripcion/ascenso/reubicacion/reconocimiento/negacion/recurso) del clasificador al analizador y a resultados"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -158,6 +158,7 @@ def llamada_clasificador(file_ids: list) -> dict:
                 "vencimiento": None,
                 "riesgo": "MEDIO",
                 "urgente": False,
+                "subtipo": None,
                 "indices_documentos": list(range(len(file_ids))),
                 "documentos": []
             }],
@@ -176,10 +177,14 @@ def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general:
         for d in docs
     ) if docs else "  No se identificaron documentos individuales"
 
+    subtipo = caso.get("subtipo")
+    subtipo_linea = f"Subtipo (detectado por el clasificador): {subtipo}\n" if subtipo else ""
+
     contexto = (
         f"[CONTEXTO PREVIO DE CLASIFICACION]\n"
         f"Tipo: {tipo_general}\n"
         f"Dependencia: {dependencia}\n"
+        f"{subtipo_linea}"
         f"Asunto: {caso.get('asunto', 'N/A')}\n"
         f"Sujeto: {caso.get('sujeto', 'N/A')}\n"
         f"Identificación: {caso.get('identificacion', 'N/A')}\n"
@@ -189,7 +194,9 @@ def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general:
         f"Urgente: {caso.get('urgente', False)}\n"
         f"Documentos de este caso:\n{docs_texto}\n\n"
         f"IMPORTANTE: Analiza SOLO el caso de {caso.get('sujeto', 'este docente/ciudadano')}. "
-        f"Los PDFs que recibes son los que pertenecen exclusivamente a este caso.\n\n"
+        f"Los PDFs que recibes son los que pertenecen exclusivamente a este caso. "
+        f"El subtipo indicado arriba (si aplica) es una detección preliminar del clasificador: "
+        f"verifícalo tú mismo contra la parte resolutiva del acto antes de darlo por definitivo.\n\n"
     )
 
     prompt_final = contexto + prompt
@@ -381,6 +388,7 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             resultados.append({
                 "tipo":            tipo_general,
                 "dependencia":     dependencia,
+                "subtipo":         caso.get("subtipo"),
                 "asunto":          (caso.get("asunto") or "").strip(),
                 "sujeto":          caso.get("sujeto"),
                 "identificacion":  caso.get("identificacion"),
