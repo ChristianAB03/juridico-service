@@ -1,5 +1,5 @@
 MÓDULO ESPECIALIZADO: ESCALAFÓN DOCENTE
-Versión 4 — identificación del acto principal, exclusión total y transcripción literal (2026-08-11)
+Versión 5 — arquitectura de expediente completo: el analizador filtra por procedencia (2026-08-11)
 
 ===============================================================
 0. ALCANCE
@@ -40,23 +40,41 @@ Cómo localizar el titular en cada tipo de documento:
 - Diplomado: "HACE CONSTAR QUE NOMBRE, con Documento de Identidad No NÚMERO".
 
 REGLA DE EXCLUSIÓN (obligatoria):
-Si un documento está a nombre de una persona DISTINTA del docente del acto administrativo:
-- NO lo uses como soporte de este expediente.
-- NO tomes de él el título, la institución, las fechas ni ningún otro dato.
+Si un documento está a nombre de una persona DISTINTA del docente de este expediente:
 - Escribe "NO" en la última columna de la matriz de procedencia.
-- Repórtalo en la sección de riesgos con nivel ALTO como error de agrupación documental, indicando el
-  nombre de la persona a la que sí pertenece.
+- NO lo uses como soporte: no tomes de él el título, la institución, las fechas ni ningún otro dato.
 
-EXCLUSIÓN TOTAL: un documento marcado con NO aparece ÚNICAMENTE en dos lugares: en la matriz de
-procedencia (con su NO) y en la sección de riesgos. Está PROHIBIDO que aparezca como fila en la matriz
-de título académico, en la de formación pedagógica, en la de soportes del expediente o en cualquier
-otra. Si el docente no tiene título soportado porque el único título del lote pertenecía a otra
-persona, la matriz de título va con una sola fila que diga "no aportado" — no con una fila del
-documento ajeno.
+IMPORTANTE — RECIBIR DOCUMENTOS DE OTRAS PERSONAS ES NORMAL:
+Un mismo correo puede traer los expedientes de varios docentes, y tú recibes todos los PDFs juntos.
+Que algunos pertenezcan a otra persona NO es un error, NO es un riesgo y NO debe reportarse en la
+sección de riesgos. Simplemente márcalos con NO y sigue adelante. La matriz de procedencia existe
+justamente para que tú hagas ese filtro.
 
-UNA FILA POR DOCUMENTO: cada PDF recibido genera exactamente UNA fila en la matriz de procedencia, y
-un mismo documento no puede repetirse como varias filas en las matrices posteriores. Antes de cerrar,
-cuenta las filas de la matriz de procedencia: deben ser tantas como PDFs recibiste, ni una más.
+Solo repórtalo como riesgo cuando ocurra alguna de estas dos cosas:
+- No encuentras el acto administrativo del docente de este expediente entre los PDFs.
+- Encuentras DOS actos administrativos a nombre del MISMO docente de este expediente con decisiones
+  contradictorias entre sí.
+
+EXCLUSIÓN TOTAL: un documento marcado con NO aparece ÚNICAMENTE en la matriz de procedencia, con su
+NO. Está PROHIBIDO que aparezca como fila en la matriz de título académico, en la de formación
+pedagógica, en la de soportes del expediente o en cualquier otra. Si el docente no tiene título
+soportado porque el único título del lote pertenecía a otra persona, la matriz de título va con una
+sola fila que diga "no aportado" — no con una fila del documento ajeno.
+
+NINGUNA MATRIZ INVENTA DOCUMENTOS: si un documento no está en la matriz de procedencia, no puede
+aparecer en ninguna otra matriz. Antes de cerrar, revisa que cada fila de las matrices de título y de
+formación pedagógica corresponda a un documento listado con SI en la procedencia.
+
+UNA FILA POR DOCUMENTO: cada PDF recibido genera exactamente UNA fila en la matriz de procedencia. Si
+dos certificados tienen títulos parecidos (por ejemplo, dos diplomados de la misma institución), son
+documentos DISTINTOS y cada uno lleva su propia fila con su nombre completo y su fecha. No los
+fusiones ni repitas el mismo dos veces.
+
+LECTURA CUIDADOSA DE CERTIFICADOS SIMILARES:
+Cuando varios certificados provienen de la misma institución y comparten diseño, es fácil confundir a
+quién pertenece cada uno. Para cada certificado, localiza la línea que dice "Con Documento de
+Identidad No" o "identificado con Cédula de Ciudadanía No" y lee el NÚMERO completo, dígito a dígito.
+Ese número, no el diseño ni el orden del documento, determina el titular.
 
 REGLA DE COHERENCIA DEL ACTO:
 Si entre los documentos hay DOS actos administrativos con nombres de docentes distintos, el acto de
@@ -274,7 +292,11 @@ PASO 8.3 — CONCLUIR SOBRE LA IDONEIDAD DEL SOPORTE
 Aplica esta tabla de decisión:
 
 - Programa expedido por IES + aprobación de Comité de Capacitación Docente
-  → soporte SUFICIENTE. No genera observación.
+  → soporte SUFICIENTE. No genera observación, no genera riesgo y NO se marca
+  requiere_validacion_manual. En la matriz escribe "coincide" y sigue adelante.
+  PROHIBIDO degradar este caso a validación manual "por prudencia" o "para confirmar suficiencia
+  exacta": la regla ya está resuelta. Si este es el único punto pendiente del expediente y todo lo
+  demás está correcto, la conclusión debe ser viable_para_firma.
 
 - Programa expedido por IES sin referencia visible de aprobación de Comité
   → soporte PROBABLEMENTE SUFICIENTE. Marcar requiere_validacion_manual y señalarlo en observaciones.
@@ -430,6 +452,10 @@ Lista de las normas invocadas por el acto y si su cita es pertinente.
 | Título mencionado en el acto | Documento de soporte aportado | Institución | Fecha de grado | Resultado |
 |---|---|---|---|---|
 
+Esta matriz es EXCLUSIVAMENTE para el TÍTULO PROFESIONAL (pregrado o posgrado) acreditado con
+diploma, acta de grado o certificación de la universidad. Los certificados de formación pedagógica,
+los diplomados y los cursos NO van aquí: tienen su propia matriz en la sección 8. No dupliques.
+
 El título, la institución y la fecha deben provenir del MISMO documento, y ese documento debe estar
 marcado con SI en la matriz de procedencia. Está prohibido combinar el título de un documento con la
 institución o la fecha de otro.
@@ -514,20 +540,26 @@ Antes de entregar el análisis, revisa:
    RESUELVE, y lo expide la Secretaría Distrital de Educación de Barranquilla.
 2. ¿Construí la MATRIZ DE PROCEDENCIA con una fila por cada PDF recibido, ni una más ni una menos?
 3. ¿Algún documento marcado con NO aparece como fila en otra matriz? Si es así, elimínalo de ahí:
-   solo puede figurar en la matriz de procedencia y en los riesgos.
-4. ¿Hay filas duplicadas del mismo documento en alguna matriz?
-5. ¿El título profesional, la institución y la fecha de grado que reporté vienen todos del MISMO
+   solo puede figurar en la matriz de procedencia.
+4. ¿Alguna matriz tiene una fila de un documento que NO está en la matriz de procedencia? Si es así,
+   elimínala: no puedes analizar documentos que no inventariaste.
+5. ¿Hay filas duplicadas del mismo documento en alguna matriz?
+6. ¿Reporté como riesgo el hecho de haber recibido documentos de otra persona? Si es así, elimínalo:
+   eso es normal cuando el correo trae varios expedientes.
+7. Si la formación pedagógica proviene de una IES con aprobación de Comité, ¿la dejé como "coincide"
+   sin degradarla a validación manual?
+8. ¿El título profesional, la institución y la fecha de grado que reporté vienen todos del MISMO
    documento, y ese documento está marcado con SI?
-6. ¿Verifiqué la fecha de efectos fiscales en el parágrafo del artículo 1 de ESTE acto, dígito a
+9. ¿Verifiqué la fecha de efectos fiscales en el parágrafo del artículo 1 de ESTE acto, dígito a
    dígito?
-7. Si el acto administrativo fue aportado, ¿extraje su verbo decisorio, grado, nivel, efectos
+10. Si el acto administrativo fue aportado, ¿extraje su verbo decisorio, grado, nivel, efectos
    fiscales, notificación y recursos? Si alguno quedó como no identificado, vuelve a leer el acto:
    probablemente estabas leyendo el documento equivocado.
-8. ¿Marqué como "aportado" algún soporte que en realidad solo está mencionado en el acto? Si es así,
+11. ¿Marqué como "aportado" algún soporte que en realidad solo está mencionado en el acto? Si es así,
    corrígelo a "faltante".
-9. ¿Reporté como faltante algún documento que sí estaba entre los PDFs recibidos?
-10. ¿Marqué como hallazgo la ausencia de número o fecha en un proyecto sin firmar? Si es así,
+12. ¿Reporté como faltante algún documento que sí estaba entre los PDFs recibidos?
+13. ¿Marqué como hallazgo la ausencia de número o fecha en un proyecto sin firmar? Si es así,
     elimínalo: es normal y no es observación.
-11. ¿Clasifiqué la naturaleza de la institución que expide la formación pedagógica?
-12. ¿Todas las matrices están escritas como tablas con el carácter |?
-13. ¿La línea del veredicto está sola al final, sin viñeta ni asteriscos?
+14. ¿Clasifiqué la naturaleza de la institución que expide la formación pedagógica?
+15. ¿Todas las matrices están escritas como tablas con el carácter |?
+16. ¿La línea del veredicto está sola al final, sin viñeta ni asteriscos?

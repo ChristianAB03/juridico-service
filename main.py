@@ -25,12 +25,21 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.11"
+BUILD_VERSION = "4.0"
 BUILD_DATE    = "2026-08-11"
-BUILD_FIX     = "Campo titular obligatorio en clasificador (su ausencia fuerza reintento). Analizador verifica procedencia de cada PDF antes de usarlo como soporte."
+BUILD_FIX     = "Arquitectura de expediente completo: cada analizador recibe todos los PDFs del correo y determina por si mismo cuales le pertenecen mediante la matriz de procedencia. El clasificador ya no reparte documentos."
 
 # Intentos máximos de clasificación antes de aplicar corrección defensiva
 MAX_INTENTOS_CLASIFICACION = 3
+
+# Modo de entrega de PDFs al analizador:
+#   "completo" → cada caso recibe TODOS los PDFs del correo y filtra por procedencia.
+#   "subconjunto" → cada caso recibe solo los PDFs que el clasificador le asignó (modo anterior).
+MODO_ENTREGA = os.environ.get("MODO_ENTREGA", "completo").strip().lower()
+
+# Si el correo trae más PDFs que este límite, se vuelve al modo subconjunto
+# para no disparar el costo por token ni el tiempo de respuesta.
+LIMITE_PDFS_MODO_COMPLETO = int(os.environ.get("LIMITE_PDFS_MODO_COMPLETO", "16"))
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -479,25 +488,59 @@ def renderizar_analisis(analisis_texto: str, meta: dict) -> str:
 # FUNCIONES AUXILIARES
 # ══════════════════════════════════════════════════════════════
 
-def validar_clasificacion(clasificacion: dict, total_pdfs: int) -> list:
+def validar_clasificacion(clasificacion: dict, total_pdfs: int, modo: str = "completo") -> list:
     """
     Audita la clasificación devuelta por el modelo.
     Devuelve una lista de errores en texto (vacía si todo está correcto).
     Estos errores se reinyectan al modelo en el reintento.
+
+    En modo "completo" el clasificador ya no reparte documentos, así que solo se
+    auditan los datos de identificación de cada caso. En modo "subconjunto" se
+    audita además la asignación de índices por caso.
     """
     errores = []
     casos = clasificacion.get("casos", []) or []
-    huerfanos = clasificacion.get("documentos_huerfanos", []) or []
 
+    # ── Validaciones comunes a ambos modos ───────────────────────
+    if not casos:
+        errores.append("No devolviste ningun caso. Debe haber al menos un caso.")
+        return errores
+
+    sujetos_vistos = set()
+    for n, caso in enumerate(casos, start=1):
+        sujeto = (caso.get("sujeto") or "").strip().upper()
+        ident  = str(caso.get("identificacion") or "").strip()
+
+        if not sujeto:
+            errores.append(f"El caso numero {n} no tiene el campo 'sujeto'. Es obligatorio.")
+            continue
+
+        clave = (sujeto, ident)
+        if clave in sujetos_vistos:
+            errores.append(
+                f"El sujeto '{sujeto}' aparece en mas de un caso. "
+                f"Un mismo docente es UN SOLO caso."
+            )
+        sujetos_vistos.add(clave)
+
+    if clasificacion.get("cantidad_casos") is not None:
+        if clasificacion.get("cantidad_casos") != len(casos):
+            errores.append(
+                f"cantidad_casos dice {clasificacion.get('cantidad_casos')} pero el array "
+                f"'casos' tiene {len(casos)} elementos."
+            )
+
+    if modo == "completo":
+        return errores
+
+    # ── Validaciones exclusivas del modo subconjunto ─────────────
+    huerfanos = clasificacion.get("documentos_huerfanos", []) or []
     indices_validos = set(range(total_pdfs))
-    vistos = {}          # indice -> lista de sujetos que lo reclaman
+    vistos = {}
     fuera_de_rango = []
 
     def registrar(idx, dueno):
-        if not isinstance(idx, int):
-            fuera_de_rango.append(idx)
-            return
-        if idx not in indices_validos:
+        if not isinstance(idx, int) or idx not in indices_validos:
             fuera_de_rango.append(idx)
             return
         vistos.setdefault(idx, []).append(dueno)
@@ -512,87 +555,45 @@ def validar_clasificacion(clasificacion: dict, total_pdfs: int) -> list:
         if idx is not None:
             registrar(idx, "HUERFANO")
 
-    # 1. Índices fuera de rango
     if fuera_de_rango:
         errores.append(
-            f"Usaste los indices {fuera_de_rango}, que NO EXISTEN. "
-            f"Se recibieron {total_pdfs} PDFs, por lo que los unicos indices validos "
-            f"son de 0 a {total_pdfs - 1}."
+            f"Usaste los indices {fuera_de_rango}, que NO EXISTEN. Se recibieron "
+            f"{total_pdfs} PDFs, por lo que los unicos indices validos son de 0 a {total_pdfs - 1}."
         )
 
-    # 2. Índices repetidos
     repetidos = {i: d for i, d in vistos.items() if len(d) > 1}
     if repetidos:
         detalle = "; ".join(f"indice {i} reclamado por {d}" for i, d in repetidos.items())
-        errores.append(f"Hay indices asignados a mas de un caso: {detalle}. Cada indice va en un solo caso.")
+        errores.append(f"Hay indices asignados a mas de un caso: {detalle}.")
 
-    # 3. Índices faltantes
     faltantes = sorted(indices_validos - set(vistos.keys()))
     if faltantes:
         errores.append(
-            f"Los indices {faltantes} no fueron asignados a ningun caso ni marcados como huerfanos. "
-            f"Todos los PDFs deben quedar asignados."
+            f"Los indices {faltantes} no fueron asignados a ningun caso ni marcados como huerfanos."
         )
 
-    # 4. Cruce de titular entre docentes (la causa raíz del bug)
-    #    El campo "titular" es OBLIGATORIO: sin él no se puede auditar la
-    #    agrupación, así que su ausencia se trata como error y fuerza reintento.
     ROLES_TERCERO = {"cedula_contratista", "tarjeta_profesional"}
     for caso in casos:
         sujeto = (caso.get("sujeto") or "").strip().upper()
         docs = caso.get("documentos", []) or []
-        indices_caso = [i for i in (caso.get("indices_documentos") or []) if isinstance(i, int)]
-
-        # 4a. Debe existir una entrada de documento por cada índice del caso
-        indices_documentados = {
-            d.get("indice") for d in docs if isinstance(d.get("indice"), int)
-        }
-        sin_documentar = sorted(set(indices_caso) - indices_documentados)
-        if sin_documentar:
-            errores.append(
-                f"En el caso de '{sujeto}' los indices {sin_documentar} aparecen en "
-                f"'indices_documentos' pero no tienen su entrada correspondiente en el array "
-                f"'documentos'. Cada indice necesita su entrada con 'titular' y 'cedula_titular'."
-            )
-
-        # 4b. Cada documento debe declarar su titular
-        sin_titular = [
-            d.get("indice") for d in docs
-            if not (d.get("titular") or "").strip()
-        ]
+        sin_titular = [d.get("indice") for d in docs if not (d.get("titular") or "").strip()]
         if sin_titular:
             errores.append(
-                f"En el caso de '{sujeto}' los documentos con indice {sin_titular} no traen el "
-                f"campo 'titular'. Ese campo es OBLIGATORIO: debes leer dentro de cada PDF el "
-                f"nombre de la persona a la que pertenece y escribirlo. Si de verdad no tiene "
-                f"nombre legible, escribe 'DESCONOCIDO'."
+                f"En el caso de '{sujeto}' los documentos con indice {sin_titular} no traen "
+                f"el campo 'titular', que es obligatorio."
             )
-
         if not sujeto:
             continue
-
-        # 4c. Ningún documento puede pertenecer a otro docente
         for doc in docs:
             titular = (doc.get("titular") or "").strip().upper()
             rol = (doc.get("rol") or "").strip().lower()
-            if not titular or titular == "DESCONOCIDO":
+            if not titular or titular == "DESCONOCIDO" or rol in ROLES_TERCERO:
                 continue
-            if rol in ROLES_TERCERO:
-                continue  # excepción legítima: contratista en cesantías
             if titular != sujeto:
                 errores.append(
                     f"CRUCE DE DOCUMENTOS: en el caso de '{sujeto}' incluiste el documento "
-                    f"indice {doc.get('indice')} ('{doc.get('nombre')}') cuyo titular es "
-                    f"'{titular}'. Ese documento pertenece al caso de '{titular}'. Muevelo."
+                    f"indice {doc.get('indice')} cuyo titular es '{titular}'. Muevelo."
                 )
-
-    # 5. Coherencia de conteo
-    if clasificacion.get("cantidad_casos") is not None:
-        if clasificacion.get("cantidad_casos") != len(casos):
-            errores.append(
-                f"cantidad_casos dice {clasificacion.get('cantidad_casos')} pero el array "
-                f"'casos' tiene {len(casos)} elementos."
-            )
 
     return errores
 
@@ -638,12 +639,32 @@ def construir_content(file_ids: list, texto_prompt: str) -> list:
     return content
 
 
-def llamada_clasificador(file_ids: list, errores_previos: list = None) -> dict:
+def llamada_clasificador(file_ids: list, errores_previos: list = None,
+                         modo: str = "completo") -> dict:
     """
     Clasifica el correo y detecta cuántos casos hay. Devuelve estructura multi-caso.
-    Si se pasan errores_previos, se reinyectan al modelo para que corrija su intento anterior.
+    En modo "completo" el clasificador NO reparte documentos: solo identifica el tipo
+    y los sujetos. Si se pasan errores_previos, se reinyectan para que corrija.
     """
     prompt = cargar_prompt("clasificador")
+
+    if modo == "completo":
+        prompt = prompt + (
+            "\n\n===============================================================\n"
+            "MODO EXPEDIENTE COMPLETO - INSTRUCCION QUE TIENE PRIORIDAD\n"
+            "===============================================================\n"
+            "En esta ejecucion NO debes repartir los documentos entre los casos.\n"
+            "Cada analizador recibira todos los PDFs y decidira por si mismo cuales le\n"
+            "pertenecen, asi que tu unica tarea es identificar:\n"
+            "  - el tipo general del correo\n"
+            "  - la dependencia\n"
+            "  - cuantas PERSONAS DISTINTAS tienen un acto administrativo principal en el correo\n"
+            "  - para cada una: sujeto, identificacion, asunto, subtipo, riesgo y urgencia\n\n"
+            "Cuenta los casos por la cantidad de ACTOS ADMINISTRATIVOS PRINCIPALES de personas\n"
+            "distintas. Los titulos, diplomas y certificados NO generan casos por si solos.\n\n"
+            "Puedes omitir por completo los campos 'indices_documentos', 'documentos' y\n"
+            "'documentos_huerfanos'. Si los incluyes, seran ignorados.\n"
+        )
 
     if errores_previos:
         correccion = (
@@ -704,8 +725,14 @@ def llamada_clasificador(file_ids: list, errores_previos: list = None) -> dict:
         }
 
 
-def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general: str, dependencia: str) -> str:
-    """Analiza UN caso específico con sus PDFs. file_ids_caso es solo los PDFs de ese caso."""
+def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general: str,
+                       dependencia: str, otros_sujetos: list = None,
+                       modo: str = "completo") -> str:
+    """
+    Analiza UN caso específico.
+    En modo "completo", file_ids_caso son TODOS los PDFs del correo y el analizador
+    determina por sí mismo cuáles pertenecen al sujeto mediante la matriz de procedencia.
+    """
     nombre_prompt = MAPA_PROMPTS.get(tipo, "general")
     prompt = cargar_prompt(nombre_prompt)
 
@@ -721,6 +748,45 @@ def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general:
     sujeto_caso = caso.get('sujeto') or 'este docente/ciudadano'
     ident_caso  = caso.get('identificacion') or 'sin identificacion'
 
+    if modo == "completo":
+        if otros_sujetos:
+            lista_otros = "\n".join(f"  - {s}" for s in otros_sujetos)
+            bloque_otros = (
+                f"Este correo contiene expedientes de MAS DE UNA persona. Ademas del titular de "
+                f"este expediente, en el correo aparecen:\n{lista_otros}\n"
+                f"Los documentos que pertenezcan a esas otras personas NO son parte de este "
+                f"expediente y no debes usarlos.\n\n"
+            )
+        else:
+            bloque_otros = (
+                f"Segun la clasificacion, este correo contiene un solo expediente. Aun asi, "
+                f"verifica el titular de cada documento antes de usarlo.\n\n"
+            )
+
+        bloque_procedencia = (
+            f"[ENTREGA DE EXPEDIENTE COMPLETO - LEE ESTO PRIMERO]\n"
+            f"Recibes TODOS los PDFs adjuntos al correo, no solo los de este expediente.\n"
+            f"El titular de ESTE expediente es: {sujeto_caso}, cedula {ident_caso}.\n\n"
+            f"{bloque_otros}"
+            f"Tu primera tarea es determinar, documento por documento, cual pertenece a "
+            f"{sujeto_caso} leyendo el nombre y la cedula que aparecen DENTRO de cada PDF.\n"
+            f"Es NORMAL y ESPERADO que varios de los PDFs pertenezcan a otras personas: eso no "
+            f"es un error del expediente ni un riesgo, es simplemente que el correo trae varios "
+            f"casos juntos. Marcalos con NO en la matriz de procedencia y excluyelos sin "
+            f"reportarlos como riesgo.\n"
+            f"Analiza UNICAMENTE los documentos de {sujeto_caso}.\n\n"
+        )
+    else:
+        bloque_procedencia = (
+            f"[VERIFICACION OBLIGATORIA DE PROCEDENCIA]\n"
+            f"El titular de este expediente es: {sujeto_caso}, cedula {ident_caso}.\n"
+            f"Los PDFs adjuntos fueron agrupados automaticamente y ESA AGRUPACION PUEDE CONTENER "
+            f"ERRORES. Antes de usar cualquier documento como soporte, lee dentro de el el nombre "
+            f"y la cedula de su titular y comparalos con los datos de arriba.\n"
+            f"Si un documento esta a nombre de OTRA persona, NO lo uses y reportalo como error de "
+            f"agrupacion documental con nivel de riesgo ALTO.\n\n"
+        )
+
     contexto = (
         f"[CONTEXTO PREVIO DE CLASIFICACION]\n"
         f"Tipo: {tipo_general}\n"
@@ -734,16 +800,7 @@ def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general:
         f"Riesgo: {caso.get('riesgo', 'MEDIO')}\n"
         f"Urgente: {caso.get('urgente', False)}\n"
         f"Documentos de este caso:\n{docs_texto}\n\n"
-        f"[VERIFICACION OBLIGATORIA DE PROCEDENCIA]\n"
-        f"El titular de este expediente es: {sujeto_caso}, cedula {ident_caso}.\n"
-        f"Los PDFs adjuntos fueron agrupados automaticamente y ESA AGRUPACION PUEDE CONTENER ERRORES.\n"
-        f"Antes de usar cualquier documento como soporte, lee dentro de el el nombre y la cedula de "
-        f"su titular y comparalos con los datos de arriba.\n"
-        f"Si un documento esta a nombre de OTRA persona, NO lo uses: no tomes de el el titulo, la "
-        f"institucion, las fechas ni ningun otro dato. Reportalo como error de agrupacion documental "
-        f"con nivel de riesgo ALTO.\n"
-        f"Si entre los PDFs hay dos actos administrativos de docentes distintos, el que corresponde a "
-        f"este expediente es el de {sujeto_caso}. El otro debe excluirse.\n\n"
+        f"{bloque_procedencia}"
         f"IMPORTANTE: Analiza SOLO el caso de {sujeto_caso}. "
         f"El subtipo indicado arriba (si aplica) es una detección preliminar del clasificador: "
         f"verifícalo tú mismo contra la parte resolutiva del acto antes de darlo por definitivo.\n\n"
@@ -883,15 +940,23 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             if not esperar_procesamiento(fid):
                 raise Exception(f"Timeout esperando procesamiento de {fid}")
 
+        # Determinar el modo de entrega de PDFs al analizador
+        total_pdfs = len(file_ids)
+        modo = MODO_ENTREGA
+        if modo == "completo" and total_pdfs > LIMITE_PDFS_MODO_COMPLETO:
+            modo = "subconjunto"
+            print(f"  [INFO] {total_pdfs} PDFs superan el limite de {LIMITE_PDFS_MODO_COMPLETO}; "
+                  f"se usa modo subconjunto para controlar costo y tiempo.")
+        print(f"Modo de entrega: {modo}")
+
         # LLAMADA 1: Clasificar y detectar casos (con reintento automático)
         print("Clasificando documentos...")
-        total_pdfs = len(file_ids)
         clasificacion = None
         errores = []
 
         for intento in range(1, MAX_INTENTOS_CLASIFICACION + 1):
-            clasificacion = llamada_clasificador(file_ids, errores_previos=errores)
-            errores = validar_clasificacion(clasificacion, total_pdfs)
+            clasificacion = llamada_clasificador(file_ids, errores_previos=errores, modo=modo)
+            errores = validar_clasificacion(clasificacion, total_pdfs, modo=modo)
 
             if not errores:
                 if intento > 1:
@@ -913,32 +978,38 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
         huerfanos     = clasificacion.get("documentos_huerfanos", [])
 
         # ── VALIDACIÓN DEFENSIVA ─────────────────────────────
-        # 1. Filtrar índices fuera de rango en cada caso
-        total_pdfs = len(file_ids)
-        for caso in casos:
-            indices_originales = caso.get("indices_documentos", [])
-            indices_validos    = [i for i in indices_originales if isinstance(i, int) and 0 <= i < total_pdfs]
-            if len(indices_validos) != len(indices_originales):
-                print(f"  [WARN] Corrigiendo índices fuera de rango en caso '{caso.get('sujeto')}': "
-                      f"{indices_originales} → {indices_validos}")
-            caso["indices_documentos"] = indices_validos
+        # 1. Filtrar índices fuera de rango (solo relevante en modo subconjunto)
+        if modo == "subconjunto":
+            for caso in casos:
+                indices_originales = caso.get("indices_documentos", [])
+                indices_validos = [
+                    i for i in indices_originales
+                    if isinstance(i, int) and 0 <= i < total_pdfs
+                ]
+                if len(indices_validos) != len(indices_originales):
+                    print(f"  [WARN] Corrigiendo índices fuera de rango en caso "
+                          f"'{caso.get('sujeto')}': {indices_originales} → {indices_validos}")
+                caso["indices_documentos"] = indices_validos
 
         # 2. Deduplicar casos con mismo sujeto+identificación
         casos_unicos = {}
         for caso in casos:
             clave = (caso.get("sujeto"), caso.get("identificacion"))
             if clave in casos_unicos:
-                # Fusionar índices sin duplicar
-                indices_existentes = set(casos_unicos[clave]["indices_documentos"])
-                indices_nuevos     = set(caso.get("indices_documentos", []))
-                casos_unicos[clave]["indices_documentos"] = sorted(indices_existentes | indices_nuevos)
+                existentes = set(casos_unicos[clave].get("indices_documentos") or [])
+                nuevos     = set(caso.get("indices_documentos") or [])
+                casos_unicos[clave]["indices_documentos"] = sorted(existentes | nuevos)
                 print(f"  [WARN] Fusionando caso duplicado de '{caso.get('sujeto')}'")
             else:
                 casos_unicos[clave] = caso
         casos = list(casos_unicos.values())
 
-        # 3. Filtrar casos sin documentos válidos
-        casos = [c for c in casos if c.get("indices_documentos")]
+        # 3. En modo subconjunto, descartar casos sin documentos asignados.
+        #    En modo completo todos los casos reciben el expediente entero.
+        if modo == "subconjunto":
+            casos = [c for c in casos if c.get("indices_documentos")]
+        else:
+            casos = [c for c in casos if (c.get("sujeto") or "").strip()]
 
         print(f"Tipo general: {tipo_general} | Casos detectados: {len(casos)} | Huérfanos: {len(huerfanos)}")
 
@@ -950,18 +1021,33 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             sujeto = caso.get('sujeto', 'sin_nombre')
             print(f"[{i}/{len(casos)}] Analizando caso de: {sujeto}")
 
-            # Extraer solo los file_ids de este caso
-            indices = caso.get("indices_documentos", [])
-            print(f"  Indices del clasificador: {indices} (total PDFs disponibles: {len(file_ids)})")
-            file_ids_caso = [file_ids[idx] for idx in indices if 0 <= idx < len(file_ids)]
-            print(f"  PDFs asignados a este caso: {len(file_ids_caso)}")
+            # Determinar qué PDFs recibe el analizador
+            if modo == "completo":
+                file_ids_caso = file_ids
+                otros_sujetos = [
+                    f"{(c.get('sujeto') or '').strip()} (cedula {c.get('identificacion') or 'no indicada'})"
+                    for c in casos
+                    if (c.get("sujeto"), c.get("identificacion")) != (caso.get("sujeto"), caso.get("identificacion"))
+                    and (c.get("sujeto") or "").strip()
+                ]
+                print(f"  Recibe el expediente completo: {len(file_ids_caso)} PDFs "
+                      f"| Otros sujetos en el correo: {len(otros_sujetos)}")
+            else:
+                indices = caso.get("indices_documentos", [])
+                print(f"  Indices del clasificador: {indices} (total PDFs: {len(file_ids)})")
+                file_ids_caso = [file_ids[idx] for idx in indices if 0 <= idx < len(file_ids)]
+                otros_sujetos = []
+                print(f"  PDFs asignados a este caso: {len(file_ids_caso)}")
 
             if not file_ids_caso:
                 print(f"  [WARN] Caso sin documentos válidos, saltando: {sujeto}")
                 continue
 
             # Ejecutar análisis
-            analisis  = llamada_analizador(file_ids_caso, tipo_general, caso, tipo_general, dependencia)
+            analisis  = llamada_analizador(
+                file_ids_caso, tipo_general, caso, tipo_general, dependencia,
+                otros_sujetos=otros_sujetos, modo=modo
+            )
             veredicto = extraer_veredicto(analisis)
             carpeta   = MAPA_CARPETAS.get((tipo_general, veredicto), "OTRO")
             nombre    = construir_nombre_archivo(caso, tipo_general, message_id)
@@ -1011,6 +1097,7 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             "cantidad_huerfanos": len(huerfanos),
             "archivos_procesados": len(file_ids),
             "formato_salida":   FORMATO_SALIDA,
+            "modo_entrega":     modo,
             "clasificacion_ok": len(clasificacion_con_errores) == 0,
             "clasificacion_errores": clasificacion_con_errores,
             "resultados":       resultados
@@ -1030,6 +1117,8 @@ def version():
         "fix":             BUILD_FIX,
         "model":           MODEL,
         "formato_salida":  FORMATO_SALIDA,
+        "modo_entrega":    MODO_ENTREGA,
+        "limite_pdfs_modo_completo": LIMITE_PDFS_MODO_COMPLETO,
         "status":          "ok"
     })
 
