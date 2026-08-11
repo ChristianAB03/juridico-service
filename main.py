@@ -25,9 +25,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.10"
+BUILD_VERSION = "3.11"
 BUILD_DATE    = "2026-08-11"
-BUILD_FIX     = "Clasificador con inventario por titular y reintento automatico. Escalafon v3: lectura forzada del acto, criterio IES vs ETDH, salida en matrices. Render HTML: enmascarado, titulos en negrita y veredicto duplicado corregidos."
+BUILD_FIX     = "Campo titular obligatorio en clasificador (su ausencia fuerza reintento). Analizador verifica procedencia de cada PDF antes de usarlo como soporte."
 
 # Intentos máximos de clasificación antes de aplicar corrección defensiva
 MAX_INTENTOS_CLASIFICACION = 3
@@ -535,12 +535,44 @@ def validar_clasificacion(clasificacion: dict, total_pdfs: int) -> list:
         )
 
     # 4. Cruce de titular entre docentes (la causa raíz del bug)
+    #    El campo "titular" es OBLIGATORIO: sin él no se puede auditar la
+    #    agrupación, así que su ausencia se trata como error y fuerza reintento.
     ROLES_TERCERO = {"cedula_contratista", "tarjeta_profesional"}
     for caso in casos:
         sujeto = (caso.get("sujeto") or "").strip().upper()
+        docs = caso.get("documentos", []) or []
+        indices_caso = [i for i in (caso.get("indices_documentos") or []) if isinstance(i, int)]
+
+        # 4a. Debe existir una entrada de documento por cada índice del caso
+        indices_documentados = {
+            d.get("indice") for d in docs if isinstance(d.get("indice"), int)
+        }
+        sin_documentar = sorted(set(indices_caso) - indices_documentados)
+        if sin_documentar:
+            errores.append(
+                f"En el caso de '{sujeto}' los indices {sin_documentar} aparecen en "
+                f"'indices_documentos' pero no tienen su entrada correspondiente en el array "
+                f"'documentos'. Cada indice necesita su entrada con 'titular' y 'cedula_titular'."
+            )
+
+        # 4b. Cada documento debe declarar su titular
+        sin_titular = [
+            d.get("indice") for d in docs
+            if not (d.get("titular") or "").strip()
+        ]
+        if sin_titular:
+            errores.append(
+                f"En el caso de '{sujeto}' los documentos con indice {sin_titular} no traen el "
+                f"campo 'titular'. Ese campo es OBLIGATORIO: debes leer dentro de cada PDF el "
+                f"nombre de la persona a la que pertenece y escribirlo. Si de verdad no tiene "
+                f"nombre legible, escribe 'DESCONOCIDO'."
+            )
+
         if not sujeto:
             continue
-        for doc in caso.get("documentos", []) or []:
+
+        # 4c. Ningún documento puede pertenecer a otro docente
+        for doc in docs:
             titular = (doc.get("titular") or "").strip().upper()
             rol = (doc.get("rol") or "").strip().lower()
             if not titular or titular == "DESCONOCIDO":
@@ -686,21 +718,33 @@ def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general:
     subtipo = caso.get("subtipo")
     subtipo_linea = f"Subtipo (detectado por el clasificador): {subtipo}\n" if subtipo else ""
 
+    sujeto_caso = caso.get('sujeto') or 'este docente/ciudadano'
+    ident_caso  = caso.get('identificacion') or 'sin identificacion'
+
     contexto = (
         f"[CONTEXTO PREVIO DE CLASIFICACION]\n"
         f"Tipo: {tipo_general}\n"
         f"Dependencia: {dependencia}\n"
         f"{subtipo_linea}"
         f"Asunto: {caso.get('asunto', 'N/A')}\n"
-        f"Sujeto: {caso.get('sujeto', 'N/A')}\n"
-        f"Identificación: {caso.get('identificacion', 'N/A')}\n"
+        f"Sujeto: {sujeto_caso}\n"
+        f"Identificación: {ident_caso}\n"
         f"Radicado: {caso.get('radicado', 'No identificado')}\n"
         f"Vencimiento: {caso.get('vencimiento', 'No identificado')}\n"
         f"Riesgo: {caso.get('riesgo', 'MEDIO')}\n"
         f"Urgente: {caso.get('urgente', False)}\n"
         f"Documentos de este caso:\n{docs_texto}\n\n"
-        f"IMPORTANTE: Analiza SOLO el caso de {caso.get('sujeto', 'este docente/ciudadano')}. "
-        f"Los PDFs que recibes son los que pertenecen exclusivamente a este caso. "
+        f"[VERIFICACION OBLIGATORIA DE PROCEDENCIA]\n"
+        f"El titular de este expediente es: {sujeto_caso}, cedula {ident_caso}.\n"
+        f"Los PDFs adjuntos fueron agrupados automaticamente y ESA AGRUPACION PUEDE CONTENER ERRORES.\n"
+        f"Antes de usar cualquier documento como soporte, lee dentro de el el nombre y la cedula de "
+        f"su titular y comparalos con los datos de arriba.\n"
+        f"Si un documento esta a nombre de OTRA persona, NO lo uses: no tomes de el el titulo, la "
+        f"institucion, las fechas ni ningun otro dato. Reportalo como error de agrupacion documental "
+        f"con nivel de riesgo ALTO.\n"
+        f"Si entre los PDFs hay dos actos administrativos de docentes distintos, el que corresponde a "
+        f"este expediente es el de {sujeto_caso}. El otro debe excluirse.\n\n"
+        f"IMPORTANTE: Analiza SOLO el caso de {sujeto_caso}. "
         f"El subtipo indicado arriba (si aplica) es una detección preliminar del clasificador: "
         f"verifícalo tú mismo contra la parte resolutiva del acto antes de darlo por definitivo.\n\n"
     )

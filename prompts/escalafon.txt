@@ -21,7 +21,44 @@ Antes de analizar, recorre cada PDF y anota:
 - A nombre de quién está y con qué cédula.
 - Si es el ACTO ADMINISTRATIVO PRINCIPAL o un soporte.
 
-PASO 1.2 — LOCALIZACIÓN DE LA PARTE RESOLUTIVA
+PASO 1.3 — MATRIZ DE PROCEDENCIA (verificación obligatoria de pertenencia)
+
+Este paso es la defensa contra errores de agrupación documental. Ejecútalo SIEMPRE, antes de usar
+cualquier documento como soporte.
+
+Para cada PDF recibido, lee el nombre y la cédula que aparecen DENTRO del documento y compáralos con
+el docente identificado en el acto administrativo principal. Construye esta tabla, que será la
+sección 2 de tu salida:
+
+| Documento | Nombre que aparece en el documento | Cédula en el documento | ¿Pertenece a este docente? |
+
+Cómo localizar el titular en cada tipo de documento:
+- Acto administrativo: "el(la) educador(a) NOMBRE, identificado(a) con la C.C. N° NÚMERO".
+- Diploma universitario: "confiere el título de X a NOMBRE, C.C. N° NÚMERO".
+- Acta de grado: "A NOMBRE, portador de la cédula de ciudadanía No. NÚMERO".
+- Certificado de formación: "Certifica que NOMBRE, identificado con Cédula de Ciudadanía No. NÚMERO".
+- Diplomado: "HACE CONSTAR QUE NOMBRE, con Documento de Identidad No NÚMERO".
+
+REGLA DE EXCLUSIÓN (obligatoria):
+Si un documento está a nombre de una persona DISTINTA del docente del acto administrativo:
+- NO lo uses como soporte de este expediente.
+- NO tomes de él el título, la institución, las fechas ni ningún otro dato.
+- Escribe "NO" en la última columna de la matriz de procedencia.
+- Repórtalo en la sección de riesgos con nivel ALTO como error de agrupación documental, indicando el
+  nombre de la persona a la que sí pertenece.
+
+REGLA DE COHERENCIA DEL ACTO:
+Si entre los documentos hay DOS actos administrativos con nombres de docentes distintos, el acto de
+este expediente es aquel cuyo docente coincide con el sujeto indicado en el contexto de clasificación.
+El otro acto NO pertenece a este caso: exclúyelo y repórtalo como error de agrupación.
+
+REGLA DE CONSISTENCIA INTERNA:
+Antes de cerrar el análisis, verifica que el título profesional, la institución, las fechas de grado y
+los certificados de formación que reportaste provengan TODOS de documentos marcados con "SÍ" en la
+matriz de procedencia. Si detectas que reportaste un título o una institución tomada de un documento
+marcado con "NO", corrige el análisis completo antes de responder.
+
+PASO 1.4 — LOCALIZACIÓN DE LA PARTE RESOLUTIVA
 Si entre los documentos hay un acto administrativo (una resolución), DEBES localizar su parte
 resolutiva. Está después de la palabra "RESUELVE" y contiene artículos numerados
 (ARTÍCULO 1, ARTÍCULO 2, ...).
@@ -43,7 +80,7 @@ Solo puedes declarar un dato como no identificado si el acto administrativo NO f
 absoluto. En ese caso debes decirlo con esta frase exacta: "El acto administrativo principal no fue
 aportado en este expediente."
 
-PASO 1.3 — DISTINGUIR AUSENCIA REAL DE AUSENCIA APARENTE
+PASO 1.5 — DISTINGUIR AUSENCIA REAL DE AUSENCIA APARENTE
 Antes de afirmar que un soporte falta, verifica que realmente no esté entre los PDFs recibidos.
 Si un documento aparece listado en el contexto de clasificación pero no lo encuentras al leer,
 repórtalo como "requiere_validacion_manual: documento listado pero no localizado en la lectura",
@@ -294,14 +331,23 @@ Estructura obligatoria:
 1. RESUMEN DEL EXPEDIENTE
 Redacta en prosa breve: docente, cédula, trámite detectado, grado y nivel, y estado general.
 
-2. MATRIZ DE IDENTIDAD
+2. MATRIZ DE PROCEDENCIA DOCUMENTAL
+
+| Documento | Nombre en el documento | Cédula en el documento | Pertenece a este docente |
+|---|---|---|---|
+
+Una fila por cada PDF recibido, sin excepción. En la última columna escribe SI o NO.
+Si alguna fila dice NO, ese documento queda EXCLUIDO del análisis y debe aparecer como riesgo ALTO en
+la sección 12.
+
+3. MATRIZ DE IDENTIDAD
 
 | Campo | En el acto administrativo | En los soportes | Resultado |
 |---|---|---|---|
 | Nombre completo | | | |
 | Cédula | | | |
 
-3. RÉGIMEN Y NATURALEZA DEL TRÁMITE
+4. RÉGIMEN Y NATURALEZA DEL TRÁMITE
 
 | Elemento | Valor detectado | Resultado |
 |---|---|---|
@@ -310,7 +356,7 @@ Redacta en prosa breve: docente, cédula, trámite detectado, grado y nivel, y e
 | Naturaleza real del trámite | | |
 | Mezcla normativa | | |
 
-4. DECISIÓN EXTRAÍDA DE LA PARTE RESOLUTIVA
+5. DECISIÓN EXTRAÍDA DE LA PARTE RESOLUTIVA
 
 | Elemento | Valor extraído | Resultado |
 |---|---|---|
@@ -323,15 +369,19 @@ Redacta en prosa breve: docente, cédula, trámite detectado, grado y nivel, y e
 | Recursos que proceden | | |
 | Autoridad que suscribe | | |
 
-5. MATRIZ DE SOPORTE NORMATIVO
+6. MATRIZ DE SOPORTE NORMATIVO
 Lista de las normas invocadas por el acto y si su cita es pertinente.
 
-6. MATRIZ DE TÍTULO ACADÉMICO
+7. MATRIZ DE TÍTULO ACADÉMICO
 
 | Título mencionado en el acto | Documento de soporte aportado | Institución | Fecha de grado | Resultado |
 |---|---|---|---|---|
 
-7. MATRIZ DE FORMACIÓN PEDAGÓGICA
+El título, la institución y la fecha deben provenir del MISMO documento, y ese documento debe estar
+marcado con SI en la matriz de procedencia. Está prohibido combinar el título de un documento con la
+institución o la fecha de otro.
+
+8. MATRIZ DE FORMACIÓN PEDAGÓGICA
 
 | Certificado | Institución | Naturaleza de la institución | Intensidad | Aprobación Comité | Resultado |
 |---|---|---|---|---|---|
@@ -339,11 +389,11 @@ Lista de las normas invocadas por el acto y si su cita es pertinente.
 En la columna "Naturaleza de la institución" escribe: IES o NO ES IES, según la clasificación de la
 sección 8.1. En "Resultado" usa uno de: coincide, requiere_validacion_manual, no_coincide, no_aplica.
 
-8. EVALUACIÓN DE COMPETENCIAS
+9. EVALUACIÓN DE COMPETENCIAS
 Indica si aplica a la figura analizada y su resultado. Si no aplica, escribe no_aplica y explica por
 qué en una línea.
 
-9. MATRIZ DE EFECTOS FISCALES Y COMPETENCIA
+10. MATRIZ DE EFECTOS FISCALES Y COMPETENCIA
 
 | Elemento | Valor detectado | Resultado |
 |---|---|---|
@@ -353,7 +403,7 @@ qué en una línea.
 | Fundamento de la competencia | | |
 | Coherencia motivación-resolución | | |
 
-10. MATRIZ DE SOPORTES DEL EXPEDIENTE
+11. MATRIZ DE SOPORTES DEL EXPEDIENTE
 
 | Documento | Carácter | Estado |
 |---|---|---|
@@ -366,17 +416,22 @@ qué en una línea.
 
 En "Estado" usa: aportado, faltante, requiere_validacion_manual o no_aplica.
 
-11. RIESGOS DETECTADOS
+REGLA ESTRICTA: marca "aportado" ÚNICAMENTE si el documento llegó como PDF independiente y lo
+verificaste en la matriz de procedencia. Que el acto administrativo MENCIONE el nombramiento, la
+evaluación del período de prueba o la constancia de firmeza NO los convierte en aportados: en ese caso
+el estado correcto es "faltante". Esta es la regla de la sección 9.
+
+12. RIESGOS DETECTADOS
 Lista con nivel explícito al inicio de cada línea:
 - ALTO: descripción
 - MEDIO: descripción
 - BAJO: descripción
 Si no hay riesgos de un nivel, escribe una línea indicándolo.
 
-12. RESUMEN JURÍDICO
+13. RESUMEN JURÍDICO
 Qué decidió el acto, qué soportes coinciden, qué soportes faltan.
 
-13. RECOMENDACIÓN FINAL
+14. RECOMENDACIÓN FINAL
 
 | Elemento | Valor |
 |---|---|
@@ -384,10 +439,10 @@ Qué decidió el acto, qué soportes coinciden, qué soportes faltan.
 | accion_sugerida | |
 | decision_final | |
 
-14. NOTA PARA EL ABOGADO REVISOR
+15. NOTA PARA EL ABOGADO REVISOR
 Párrafo breve con la recomendación de fondo y el punto exacto que requiere su criterio.
 
-Después de la sección 14, escribe una línea en blanco y luego únicamente esta línea, sin viñeta y sin
+Después de la sección 15, escribe una línea en blanco y luego únicamente esta línea, sin viñeta y sin
 ningún otro texto en la misma línea:
 
 VEREDICTO: APROBADO
@@ -401,12 +456,18 @@ VEREDICTO: DESAPROBADO
 ===============================================================
 Antes de entregar el análisis, revisa:
 
-1. Si el acto administrativo fue aportado, ¿extraje su verbo decisorio, grado, nivel, efectos
+1. ¿Construí la MATRIZ DE PROCEDENCIA con una fila por cada PDF recibido?
+2. ¿El título profesional, la institución y la fecha de grado que reporté vienen todos del MISMO
+   documento, y ese documento está marcado con SI en la matriz de procedencia?
+3. ¿Los certificados de formación pedagógica que reporté están marcados con SI?
+4. ¿La fecha de efectos fiscales que reporté proviene del acto administrativo de ESTE docente?
+5. Si el acto administrativo fue aportado, ¿extraje su verbo decisorio, grado, nivel, efectos
    fiscales, notificación y recursos? Si alguno quedó como no identificado, vuelve a leer el acto.
-2. ¿Reporté como faltante algún documento que sí estaba entre los PDFs recibidos?
-3. ¿Usé algún soporte que pertenece a otra persona distinta del docente de este caso?
-4. ¿Marqué como hallazgo la ausencia de número o fecha en un proyecto sin firmar? Si es así,
+6. ¿Marqué como "aportado" algún soporte que en realidad solo está mencionado en el acto? Si es así,
+   corrígelo a "faltante".
+7. ¿Reporté como faltante algún documento que sí estaba entre los PDFs recibidos?
+8. ¿Marqué como hallazgo la ausencia de número o fecha en un proyecto sin firmar? Si es así,
    elimínalo: es normal y no es observación.
-5. ¿Clasifiqué la naturaleza de la institución que expide la formación pedagógica?
-6. ¿Todas las matrices están escritas como tablas con el carácter |?
-7. ¿La línea del veredicto está sola al final, sin viñeta ni asteriscos?
+9. ¿Clasifiqué la naturaleza de la institución que expide la formación pedagógica?
+10. ¿Todas las matrices están escritas como tablas con el carácter |?
+11. ¿La línea del veredicto está sola al final, sin viñeta ni asteriscos?
