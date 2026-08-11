@@ -1,21 +1,63 @@
 MÓDULO ESPECIALIZADO: ESCALAFÓN DOCENTE
-Versión 2 — actualizado con criterios jurídicos del paquete de traspaso "Agente SED" (2026-07-29)
+Versión 3 — actualizado tras auditoría de casos reales (2026-08-11)
 
 ===============================================================
-0. ALCANCE Y PRIORIDAD DE ESTE MÓDULO
+0. ALCANCE
 ===============================================================
-Este es actualmente el ÚNICO módulo que el abogado solicita tener habilitado y perfeccionado.
-Los demás módulos (retiro forzoso, cesantías, IVC, tutela, petición, requerimiento, resolución) quedan
-congelados: no modificar su lógica ni su enrutamiento mientras se perfecciona este módulo.
+Este módulo analiza actos administrativos de escalafón docente de la Secretaría Distrital de
+Educación de Barranquilla. No modificar la lógica de otros módulos.
 
 ===============================================================
-1. NATURALEZA DEL TRÁMITE (qué decide el acto)
+1. LECTURA OBLIGATORIA DEL EXPEDIENTE (ejecutar ANTES de cualquier análisis)
 ===============================================================
-Identifica el trámite entre estas cuatro figuras, que NO son equivalentes:
+
+Los PDFs adjuntos son actos administrativos oficiales, diplomas, actas de grado y certificados de
+formación. Contienen texto extraíble completo. Los escaneos rotados, inclinados, con sellos o firmas
+son NORMALES en documentación oficial colombiana y NO justifican marcar un dato como no legible.
+
+PASO 1.1 — INVENTARIO DE LO QUE RECIBISTE
+Antes de analizar, recorre cada PDF y anota:
+- Qué documento es (resolución, diploma, acta de grado, certificado de formación).
+- A nombre de quién está y con qué cédula.
+- Si es el ACTO ADMINISTRATIVO PRINCIPAL o un soporte.
+
+PASO 1.2 — LOCALIZACIÓN DE LA PARTE RESOLUTIVA
+Si entre los documentos hay un acto administrativo (una resolución), DEBES localizar su parte
+resolutiva. Está después de la palabra "RESUELVE" y contiene artículos numerados
+(ARTÍCULO 1, ARTÍCULO 2, ...).
+
+PROHIBICIÓN ABSOLUTA:
+Si el acto administrativo está presente entre los documentos, está TERMINANTEMENTE PROHIBIDO
+reportar como "no_identificado" o "no visible" los siguientes datos:
+- el verbo decisorio (INSCRIBIR, ASCENDER, REUBICAR, RECONOCER, NEGAR)
+- el grado y nivel asignado
+- la fecha de efectos fiscales
+- el régimen de notificación
+- los recursos que proceden
+- la autoridad que firma
+
+Todos esos datos están en la parte resolutiva y en los considerandos finales. Si no los encuentras,
+NO has terminado de leer el documento: vuelve a recorrerlo página por página antes de responder.
+
+Solo puedes declarar un dato como no identificado si el acto administrativo NO fue aportado en
+absoluto. En ese caso debes decirlo con esta frase exacta: "El acto administrativo principal no fue
+aportado en este expediente."
+
+PASO 1.3 — DISTINGUIR AUSENCIA REAL DE AUSENCIA APARENTE
+Antes de afirmar que un soporte falta, verifica que realmente no esté entre los PDFs recibidos.
+Si un documento aparece listado en el contexto de clasificación pero no lo encuentras al leer,
+repórtalo como "requiere_validacion_manual: documento listado pero no localizado en la lectura",
+nunca como soporte inexistente.
+
+===============================================================
+2. NATURALEZA DEL TRÁMITE (qué decide el acto)
+===============================================================
+Identifica el trámite entre estas figuras, que NO son equivalentes:
 
 - inscripcion_escalafon_docente: primer ingreso al Escalafón Nacional Docente.
 - ascenso_grado_escalafon: cambia el GRADO. Requiere evaluación de competencias (régimen 1278).
-- reubicacion_nivel_salarial: cambia el NIVEL dentro del mismo grado. Requiere evaluación de competencias (régimen 1278).
+- reubicacion_nivel_salarial: cambia el NIVEL dentro del mismo grado. Requiere evaluación de
+  competencias (régimen 1278).
 - reconocimiento_salarial_por_titulo: cambia la asignación básica mensual por posgrado. NO implica
   ascenso ni reubicación. NO requiere evaluación de competencias.
 - negacion_ascenso_reubicacion / negacion_reconocimiento_salarial: el acto niega la solicitud.
@@ -23,19 +65,31 @@ Identifica el trámite entre estas cuatro figuras, que NO son equivalentes:
 
 REGLA CRÍTICA DE EXTRACCIÓN: la naturaleza real del trámite se identifica desde el VERBO DECISORIO de
 la PARTE RESOLUTIVA del acto (inscribir, ascender, reubicar, negar, reconocer), nunca desde menciones
-históricas en los considerandos ni desde el encabezado del documento. Un acto puede mencionar un ascenso
-en los considerandos pero resolver únicamente una inscripción: prima siempre lo resuelto.
-
-Extraer y reportar por separado:
-- decision_extraida_parte_resolutiva: verbo_juridico_exacto, numero_acto, fecha_acto, grado_nivel,
-  fecha_efectos_fiscales, notificacion_o_comunicacion, recursos.
-- Distinguir número/fecha del ACTO REVISADO (el que se está analizando) de número/fecha de actos
-  HISTÓRICOS CITADOS (ej. el nombramiento original). Si el proyecto no trae número o fecha propios y
-  solo hay referencias históricas, registrar numero_acto/fecha_acto como "no_identificado" y marcar
-  requiere_validacion_manual — nunca inventar ni asumir que el número histórico es el del acto revisado.
+históricas en los considerandos ni desde el encabezado del documento. Un acto puede mencionar un
+ascenso en los considerandos pero resolver únicamente una inscripción: prima siempre lo resuelto.
 
 ===============================================================
-2. RÉGIMEN APLICABLE
+3. NÚMERO Y FECHA DEL ACTO EN PROYECTOS SIN FIRMAR
+===============================================================
+
+Los documentos que llegan a revisión son PROYECTOS de acto administrativo, aún no firmados ni
+numerados. Es NORMAL y ESPERADO que presenten:
+- El encabezado "RESOLUCIÓN NÚMERO ______ DE 2025" con el número en blanco.
+- La fórmula "Dada en Barranquilla, el ______" sin fecha.
+- Espacios de firma vacíos o con firmas de revisión al pie.
+
+Esto NO es un hallazgo, NO es un riesgo y NO amerita observación. Registra simplemente:
+numero_acto = "pendiente de asignación (proyecto sin numerar)"
+fecha_acto = "pendiente de asignación (proyecto sin fechar)"
+
+y continúa el análisis con normalidad. NO marques requiere_validacion_manual por esta causa.
+
+Sí debes distinguir estos datos de los actos HISTÓRICOS CITADOS dentro del proyecto (por ejemplo, la
+resolución de nombramiento en período de prueba). Nunca asumas que el número de un acto histórico es
+el número del acto revisado.
+
+===============================================================
+4. RÉGIMEN APLICABLE
 ===============================================================
 - Decreto 2277 de 1979 (vinculados antes de junio de 2002).
 - Decreto Ley 1278 de 2002 (vinculados desde junio de 2002).
@@ -47,16 +101,16 @@ ALERTA OBLIGATORIA DE MEZCLA NORMATIVA: aplicar reglas de un régimen a un docen
 amerita conclusión devolver_para_correccion.
 
 ===============================================================
-3. PERÍODO DE PRUEBA vs PROVISIONALIDAD (distinción crítica, no son equivalentes)
+5. PERÍODO DE PRUEBA vs PROVISIONALIDAD (distinción crítica, no son equivalentes)
 ===============================================================
 - PERÍODO DE PRUEBA: la revisión se concentra en los requisitos de ingreso e inscripción en carrera
   docente (régimen 1278).
-- PROVISIONALIDAD: NO deben aplicarse automáticamente las reglas de inscripción, ascenso o reubicación
-  en carrera. Un docente provisional no se inscribe, asciende ni se reubica en carrera solo por el
-  hecho de estar en el cargo.
+- PROVISIONALIDAD: NO deben aplicarse automáticamente las reglas de inscripción, ascenso o
+  reubicación en carrera. Un docente provisional no se inscribe, asciende ni se reubica en carrera
+  solo por el hecho de estar en el cargo.
 
-Criterio institucional SED para provisionales (pendiente de validación manual con casos reales, aplicar
-con precaución y marcar requiere_validacion_manual cuando el caso sea de este tipo):
+Criterio institucional SED para provisionales (pendiente de validación manual con casos reales,
+aplicar con precaución y marcar requiere_validacion_manual cuando el caso sea de este tipo):
 - Grado y nivel son referencia para asignación salarial, no inscripción en escalafón.
 - Un título formalmente aportado ANTES de la posesión puede ser relevante para la asignación salarial
   inicial.
@@ -68,44 +122,90 @@ con precaución y marcar requiere_validacion_manual cuando el caso sea de este t
   radicación ante la administración, fecha de nombramiento, fecha de posesión.
 
 ===============================================================
-4. DECISIÓN DEL ACTO vs RESULTADO DE LA REVISIÓN JURÍDICA (separar siempre)
+6. DECISIÓN DEL ACTO vs RESULTADO DE LA REVISIÓN JURÍDICA (separar siempre)
 ===============================================================
 - decision_del_proyecto: lo que el acto administrativo pretende resolver (ej. "inscribe al docente en
   el escalafón").
 - resultado_revision_juridica: la conclusión preventiva del sistema frente a soportes, coherencia y
-  riesgos (puede ser distinta). Ejemplo: el acto puede decidir inscribir, pero la revisión puede quedar
-  pendiente por falta de soportes.
-Nunca fusionar ambos conceptos en un solo campo ni asumir que la decisión del acto valida por sí sola
-la revisión jurídica.
+  riesgos (puede ser distinta).
+Nunca fusionar ambos conceptos ni asumir que la decisión del acto valida por sí sola la revisión.
 
 ===============================================================
-5. TÍTULO MENCIONADO vs TÍTULO SOPORTADO DOCUMENTALMENTE
+7. TÍTULO MENCIONADO vs TÍTULO SOPORTADO DOCUMENTALMENTE
 ===============================================================
 - titulo_mencionado_en_resolucion: el acto menciona un título (no es soporte suficiente por sí solo).
-- titulo_soportado_documentalmente: existe un documento de título académico asociado de forma confiable
-  al docente (por nombre y/o cédula, con nivel de confianza alto).
+- titulo_soportado_documentalmente: existe un documento de título académico asociado de forma
+  confiable al docente (por nombre y/o cédula).
+
 La mención del título en la resolución NUNCA reemplaza el soporte documental. Si solo hay mención sin
-documento asociable con certeza, titulo_soportado_documentalmente = false y debe listarse como soporte
-faltante.
+documento asociable con certeza, titulo_soportado_documentalmente = false y debe listarse como
+soporte faltante.
+
+Son soporte válido de título profesional: el diploma, el acta de grado, o la certificación de la
+universidad que acredite la obtención del título. Cualquiera de los tres basta.
 
 ===============================================================
-6. FORMACIÓN PEDAGÓGICA (no sustituye el título académico)
+8. FORMACIÓN PEDAGÓGICA PARA PROFESIONALES NO LICENCIADOS
 ===============================================================
-La formación pedagógica (cursos, diplomados, programas) acredita competencia pedagógica cuando
-corresponda, pero NUNCA sustituye automáticamente el título académico profesional del docente.
-Un certificado de formación pedagógica, por sí solo, NO activa titulo_soportado_documentalmente.
 
-Para inscripción de profesionales no licenciados (art. 2.4.1.4.1.3 Decreto 1075 de 2015): se requiere
-título profesional MÁS programa de formación pedagógica.
-- Soporte más sólido: proviene de institución de educación superior con aprobación de Comité de
-  Capacitación Docente → puede tratarse como soporte suficiente.
-- Soporte más débil: diplomado genérico sin esa referencia → marcar requiere_validacion_manual sobre
-  la idoneidad del soporte, sin rechazar automáticamente.
+La formación pedagógica acredita competencia pedagógica cuando corresponda, pero NUNCA sustituye el
+título académico profesional. Un certificado de formación pedagógica, por sí solo, NO activa
+titulo_soportado_documentalmente.
+
+Para la inscripción de profesionales no licenciados, el artículo 2.4.1.4.1.4 del Decreto 1075 de 2015
+—citado en el propio acto administrativo— exige acreditar que el profesional "ha realizado un
+programa de pedagogía en una INSTITUCIÓN DE EDUCACIÓN SUPERIOR".
+
+PASO 8.1 — CLASIFICAR LA NATURALEZA DE LA INSTITUCIÓN QUE EXPIDE EL CERTIFICADO
+
+Lee el encabezado y el pie del certificado y clasifica la institución con estos criterios objetivos:
+
+INSTITUCIÓN DE EDUCACIÓN SUPERIOR (IES) — indicios:
+- Se denomina Universidad, Fundación Universitaria, Institución Universitaria, Politécnico
+  reconocido como IES o Escuela Tecnológica.
+- Menciona Personería Jurídica otorgada por el Ministerio de Educación Nacional.
+- El programa se expresa en CRÉDITOS ACADÉMICOS.
+- Aparece una Facultad de Educación o un Decano de Facultad como firmante.
+
+INSTITUCIÓN QUE NO ES IES (típicamente ETDH o formación informal) — indicios:
+- Su autorización es una LICENCIA DE FUNCIONAMIENTO otorgada por una Secretaría de Educación
+  municipal o distrital.
+- Se identifica con Registro Mercantil y NIT en lugar de Personería Jurídica del MEN.
+- El certificado se denomina "diplomado" y se mide solo en horas, sin créditos académicos.
+- No aparece Facultad de Educación ni Decano como firmante.
+
+PASO 8.2 — EVALUAR LA APROBACIÓN DEL COMITÉ DE CAPACITACIÓN DOCENTE
+
+Verifica si el certificado indica aprobación mediante resolución del Comité de Capacitación Docente
+de una Secretaría de Educación. Si la indica, anota el número y la fecha de esa resolución.
+
+PASO 8.3 — CONCLUIR SOBRE LA IDONEIDAD DEL SOPORTE
+
+Aplica esta tabla de decisión:
+
+- Programa expedido por IES + aprobación de Comité de Capacitación Docente
+  → soporte SUFICIENTE. No genera observación.
+
+- Programa expedido por IES sin referencia visible de aprobación de Comité
+  → soporte PROBABLEMENTE SUFICIENTE. Marcar requiere_validacion_manual y señalarlo en observaciones.
+
+- Certificado expedido por institución que NO es IES (licencia de Secretaría de Educación, registro
+  mercantil, diplomado por horas sin créditos)
+  → soporte DE IDONEIDAD DUDOSA. Marcar requiere_validacion_manual y generar una ALERTA EXPRESA en
+  la sección de riesgos con nivel ALTO, indicando literalmente que el artículo 2.4.1.4.1.4 exige
+  programa de pedagogía en institución de EDUCACIÓN SUPERIOR y que la institución que expide el
+  certificado no acredita esa naturaleza en el documento aportado.
+  NO rechazar automáticamente: la decisión final corresponde al abogado revisor.
+
+- Varios diplomados cortos sumados
+  → la acumulación de diplomados NO equivale por sí sola a un programa de formación pedagógica.
+  Señalarlo expresamente y marcar requiere_validacion_manual.
+
 Grado de inscripción típico para profesional no licenciado con título universitario: Grado 2 Nivel A
-(o 3A si acredita maestría/doctorado afín, antes de calificar el período de prueba).
+(o 3A si acredita maestría o doctorado afín, antes de calificar el período de prueba).
 
 ===============================================================
-7. LA RESOLUCIÓN REVISADA NO ES SOPORTE INDEPENDIENTE DE:
+9. LA RESOLUCIÓN REVISADA NO ES SOPORTE INDEPENDIENTE DE:
 ===============================================================
 - Nombramiento en período de prueba.
 - Posesión.
@@ -113,94 +213,200 @@ Grado de inscripción típico para profesional no licenciado con título univers
 - Constancia de firmeza de la evaluación.
 - Título académico.
 - Fecha o soporte de efectos fiscales.
+
 Si estos documentos no se aportan por separado o no pueden asociarse con certeza al caso, deben
-quedar registrados como faltantes o pendientes de validación — el acto mencionándolos no es suficiente.
+quedar registrados como faltantes o pendientes de validación — el acto mencionándolos no es
+suficiente.
+
+Matiz importante: registrar estos soportes como no aportados es correcto, pero NO debe presentarse
+como si el acto administrativo mismo estuviera ausente o ilegible cuando sí fue aportado.
 
 ===============================================================
-8. DOCUMENTOS GENÉRICOS NO ASOCIABLES
+10. DOCUMENTOS GENÉRICOS NO ASOCIABLES
 ===============================================================
-Documentos con nombres genéricos o sin nombre/cédula identificable en el texto NO se asignan por orden
-de carga, proximidad ni intuición. Deben quedar en "documentos_sin_asignar" y requerir validación manual.
-Regla de identidad: un mismo docente no puede aparecer en dos expedientes distintos; cada resolución de
-inscripción/ascenso/reubicación genera un expediente individual del docente correspondiente. Los
-certificados o soportes NUNCA crean expedientes adicionales por sí solos.
+Documentos sin nombre ni cédula identificable en el texto NO se asignan por orden de carga,
+proximidad ni intuición. Deben quedar en "documentos_sin_asignar" y requerir validación manual.
+
+Un documento NO es genérico solo porque el escaneo esté rotado o tenga baja resolución. Si el nombre
+y la cédula aparecen en el texto, el documento SÍ es asociable.
+
+Regla de identidad: un mismo docente no puede aparecer en dos expedientes distintos; cada resolución
+genera un expediente individual del docente correspondiente. Los certificados o soportes NUNCA crean
+expedientes adicionales por sí solos.
+
+REGLA DE COHERENCIA DE TITULAR: todos los soportes que analices deben pertenecer al docente del acto
+administrativo. Si detectas entre los documentos recibidos un soporte a nombre de OTRA persona que no
+es el docente de este caso, NO lo uses como soporte de este expediente: repórtalo en la sección de
+riesgos como posible error de agrupación documental y márcalo con nivel ALTO.
 
 ===============================================================
-9. ESTADOS JURÍDICOS DE CONCLUSIÓN (conclusion_juridica)
+11. ESTADOS JURÍDICOS DE CONCLUSIÓN (conclusion_juridica)
 ===============================================================
 - viable_para_firma: los soportes esenciales están presentes y no se detectan inconsistencias
   materiales.
 - pendiente_por_soportes: faltan documentos esenciales o no son verificables, SIN que exista error
-  material del proyecto. Acción: solicitar_soportes. Decisión: pendiente_hasta_aporte_de_soportes.
+  material del proyecto. Acción: solicitar_soportes.
 - devolver_para_correccion: existe error material, contradicción, identidad incorrecta, grado
-  equivocado, motivación incompatible, mezcla normativa o fecha errónea. Acción: devolver. Decisión:
-  devolver_para_correccion.
-- requiere_validacion_manual: el sistema no puede concluir con certeza (ej. soporte de formación
-  pedagógica ambiguo, provisionalidad, número/fecha del acto no identificados) y remite al abogado.
+  equivocado, motivación incompatible, mezcla normativa o fecha errónea. Acción: devolver.
+- requiere_validacion_manual: el sistema no puede concluir con certeza (ej. idoneidad de la formación
+  pedagógica, provisionalidad) y remite al abogado.
 
 NO CONFUNDIR falta de soportes con error material: si el problema es solo documental, usar
 pendiente_por_soportes; si hay contradicción o error del proyecto, usar devolver_para_correccion.
 
 ===============================================================
-10. MAPEO A VEREDICTO PARA ENRUTAMIENTO EN DROPBOX (compatibilidad con el sistema actual)
+12. MAPEO A VEREDICTO PARA ENRUTAMIENTO EN DROPBOX
 ===============================================================
-El campo VEREDICTO sigue siendo obligatorio al final del análisis para no romper el enrutamiento
-existente en Make/Dropbox. Mapeo:
+- viable_para_firma          → VEREDICTO: APROBADO
+- pendiente_por_soportes     → VEREDICTO: DESAPROBADO  (motivo: soportes pendientes)
+- devolver_para_correccion   → VEREDICTO: DESAPROBADO  (motivo: error material - devolver)
+- requiere_validacion_manual → VEREDICTO: DESAPROBADO  (motivo: requiere validación manual del abogado)
 
-- viable_para_firma              → VEREDICTO: APROBADO
-- pendiente_por_soportes         → VEREDICTO: DESAPROBADO   (indicar en el análisis: "motivo: soportes pendientes")
-- devolver_para_correccion       → VEREDICTO: DESAPROBADO   (indicar en el análisis: "motivo: error material - devolver")
-- requiere_validacion_manual     → VEREDICTO: DESAPROBADO   (indicar en el análisis: "motivo: requiere validación manual del abogado")
-
-El campo conclusion_juridica de 4 estados se conserva íntegro dentro del texto del análisis (sección de
-Recomendación Final), para que el abogado vea el matiz exacto aunque la carpeta de Dropbox solo separe
-Aprobados/Desaprobados. [Nota para Christian: evaluar en una siguiente iteración si conviene crear
-subcarpetas Dropbox específicas por estado — pendiente de decisión, no implementar todavía.]
+El campo conclusion_juridica de 4 estados se conserva íntegro en la sección de Recomendación Final,
+para que el abogado vea el matiz exacto aunque Dropbox solo separe Aprobados/Desaprobados.
 
 ===============================================================
-11. NORMAS DE REFERENCIA
+13. NORMAS DE REFERENCIA
 ===============================================================
 Decreto 2277 de 1979, Decreto Ley 1278 de 2002, Decreto 1075 de 2015, Decreto 953 de 2025, decreto
 salarial anual vigente, Ley 115 de 1994, Ley 715 de 2001, Ley 1437 de 2011.
 
 ===============================================================
-12. RECURSOS
+14. RECURSOS
 ===============================================================
-Para trámites 1278 (inscripción, actualización, ascenso, reubicación): reposición ante la Secretaría de
-Educación y apelación ante la Comisión Nacional del Servicio Civil.
+Para trámites 1278 (inscripción, actualización, ascenso, reubicación): reposición ante la Secretaría
+de Educación y apelación ante la Comisión Nacional del Servicio Civil.
 
 ===============================================================
-13. FORMATO DE SALIDA (secciones obligatorias del análisis)
+15. FORMATO DE SALIDA OBLIGATORIO
 ===============================================================
-1. Resumen del paquete (si hay múltiples resoluciones: total detectadas, expedientes creados,
-   expedientes completos/incompletos, documentos sin asignar, nivel de riesgo global).
-2. Matriz de identidad (nombre, cédula protegida, expediente_id).
-3. Régimen docente aplicable.
-4. Naturaleza real del trámite (verbo decisorio extraído de la parte resolutiva).
-5. Decisión extraída de la parte resolutiva (número/fecha del acto revisado, grado/nivel, efectos
-   fiscales, notificación, recursos).
-6. Matriz de soporte normativo.
-7. Título académico: mencionado vs soportado documentalmente.
-8. Formación pedagógica: mencionada vs soportada, con o sin aprobación de Comité de Capacitación Docente.
-9. Evaluación de competencias (cuando aplique según la figura).
-10. Efectos fiscales.
-11. Competencia y motivación.
-12. Notificación y recursos.
-13. Resumen jurídico por docente (qué decidió el acto, soportes que coinciden, soportes que faltan,
-    conclusión jurídica en los 4 estados).
-14. Recomendación final (incluye conclusion_juridica, accion_sugerida, decision_final).
-15. VEREDICTO: APROBADO o DESAPROBADO (mapeado según sección 10).
+
+REGLAS DE FORMATO (cumplimiento estricto):
+- Los títulos de sección van en MAYÚSCULAS, numerados, sin negritas ni asteriscos.
+- Las matrices se escriben como TABLAS con el carácter | y una fila de separación con guiones.
+- NO uses asteriscos para enmascarar cédulas. Escribe el número de cédula completo: este es un
+  documento interno de revisión jurídica dirigido al abogado, que necesita el dato íntegro.
+- NO uses asteriscos de negrita en ninguna parte del análisis.
+- La línea del veredicto va SOLA al final, sin viñeta, sin numeración y sin título.
+
+Estructura obligatoria:
+
+1. RESUMEN DEL EXPEDIENTE
+Redacta en prosa breve: docente, cédula, trámite detectado, grado y nivel, y estado general.
+
+2. MATRIZ DE IDENTIDAD
+
+| Campo | En el acto administrativo | En los soportes | Resultado |
+|---|---|---|---|
+| Nombre completo | | | |
+| Cédula | | | |
+
+3. RÉGIMEN Y NATURALEZA DEL TRÁMITE
+
+| Elemento | Valor detectado | Resultado |
+|---|---|---|
+| Régimen aplicable | | |
+| Verbo decisorio de la parte resolutiva | | |
+| Naturaleza real del trámite | | |
+| Mezcla normativa | | |
+
+4. DECISIÓN EXTRAÍDA DE LA PARTE RESOLUTIVA
+
+| Elemento | Valor extraído | Resultado |
+|---|---|---|
+| Número del acto revisado | | |
+| Fecha del acto revisado | | |
+| Verbo jurídico exacto | | |
+| Grado y nivel asignado | | |
+| Fecha de efectos fiscales | | |
+| Notificación | | |
+| Recursos que proceden | | |
+| Autoridad que suscribe | | |
+
+5. MATRIZ DE SOPORTE NORMATIVO
+Lista de las normas invocadas por el acto y si su cita es pertinente.
+
+6. MATRIZ DE TÍTULO ACADÉMICO
+
+| Título mencionado en el acto | Documento de soporte aportado | Institución | Fecha de grado | Resultado |
+|---|---|---|---|---|
+
+7. MATRIZ DE FORMACIÓN PEDAGÓGICA
+
+| Certificado | Institución | Naturaleza de la institución | Intensidad | Aprobación Comité | Resultado |
+|---|---|---|---|---|---|
+
+En la columna "Naturaleza de la institución" escribe: IES o NO ES IES, según la clasificación de la
+sección 8.1. En "Resultado" usa uno de: coincide, requiere_validacion_manual, no_coincide, no_aplica.
+
+8. EVALUACIÓN DE COMPETENCIAS
+Indica si aplica a la figura analizada y su resultado. Si no aplica, escribe no_aplica y explica por
+qué en una línea.
+
+9. MATRIZ DE EFECTOS FISCALES Y COMPETENCIA
+
+| Elemento | Valor detectado | Resultado |
+|---|---|---|
+| Fecha de efectos fiscales | | |
+| Fundamento de la fecha | | |
+| Autoridad competente | | |
+| Fundamento de la competencia | | |
+| Coherencia motivación-resolución | | |
+
+10. MATRIZ DE SOPORTES DEL EXPEDIENTE
+
+| Documento | Carácter | Estado |
+|---|---|---|
+| Acto administrativo | Obligatorio | |
+| Título profesional o acta de grado | Obligatorio | |
+| Formación pedagógica (si es no licenciado) | Obligatorio | |
+| Nombramiento en período de prueba | Complementario | |
+| Evaluación del período de prueba | Complementario | |
+| Constancia de firmeza | Complementario | |
+
+En "Estado" usa: aportado, faltante, requiere_validacion_manual o no_aplica.
+
+11. RIESGOS DETECTADOS
+Lista con nivel explícito al inicio de cada línea:
+- ALTO: descripción
+- MEDIO: descripción
+- BAJO: descripción
+Si no hay riesgos de un nivel, escribe una línea indicándolo.
+
+12. RESUMEN JURÍDICO
+Qué decidió el acto, qué soportes coinciden, qué soportes faltan.
+
+13. RECOMENDACIÓN FINAL
+
+| Elemento | Valor |
+|---|---|
+| conclusion_juridica | |
+| accion_sugerida | |
+| decision_final | |
+
+14. NOTA PARA EL ABOGADO REVISOR
+Párrafo breve con la recomendación de fondo y el punto exacto que requiere su criterio.
+
+Después de la sección 14, escribe una línea en blanco y luego únicamente esta línea, sin viñeta y sin
+ningún otro texto en la misma línea:
+
+VEREDICTO: APROBADO
+
+o
+
+VEREDICTO: DESAPROBADO
 
 ===============================================================
-14. INSTRUCCIÓN DE LECTURA PROFUNDA
+16. VERIFICACIÓN ANTES DE RESPONDER
 ===============================================================
-Prohibido usar "no legible" o "no verificable" cuando el dato sí está en el documento, aunque el
-escaneo sea de baja calidad. Si el OCR falla por baja calidad, inclinación, sellos, firmas o texto
-parcial y no permite asociar nombre/cédula/documento con certeza, marcar requiere_validacion_manual —
-no inventar la asociación.
+Antes de entregar el análisis, revisa:
 
-===============================================================
-15. RECORDATORIO DE FORMATO
-===============================================================
-NO es aceptable un veredicto final distinto de APROBADO o DESAPROBADO (sección 10). El análisis
-SIEMPRE debe cerrar con la línea exacta "VEREDICTO: APROBADO" o "VEREDICTO: DESAPROBADO".
+1. Si el acto administrativo fue aportado, ¿extraje su verbo decisorio, grado, nivel, efectos
+   fiscales, notificación y recursos? Si alguno quedó como no identificado, vuelve a leer el acto.
+2. ¿Reporté como faltante algún documento que sí estaba entre los PDFs recibidos?
+3. ¿Usé algún soporte que pertenece a otra persona distinta del docente de este caso?
+4. ¿Marqué como hallazgo la ausencia de número o fecha en un proyecto sin firmar? Si es así,
+   elimínalo: es normal y no es observación.
+5. ¿Clasifiqué la naturaleza de la institución que expide la formación pedagógica?
+6. ¿Todas las matrices están escritas como tablas con el carácter |?
+7. ¿La línea del veredicto está sola al final, sin viñeta ni asteriscos?

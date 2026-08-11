@@ -25,9 +25,12 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.8"
+BUILD_VERSION = "3.10"
 BUILD_DATE    = "2026-08-11"
-BUILD_FIX     = "Salida HTML formateada: el analisis se entrega maquetado (encabezado, badge de veredicto, tablas y estados con color) para guardarse como .html en Dropbox"
+BUILD_FIX     = "Clasificador con inventario por titular y reintento automatico. Escalafon v3: lectura forzada del acto, criterio IES vs ETDH, salida en matrices. Render HTML: enmascarado, titulos en negrita y veredicto duplicado corregidos."
+
+# Intentos máximos de clasificación antes de aplicar corrección defensiva
+MAX_INTENTOS_CLASIFICACION = 3
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -111,16 +114,25 @@ VEREDICTO_ESTILO = {
 _RE_SEPARADOR_TABLA = re.compile(r'^\s*\|?[\s:|-]+\|?\s*$')
 _RE_TITULO_NUM      = re.compile(r'^\s*(\d{1,2})[\.\)]\s+(.{2,120})$')
 _RE_ETAPA           = re.compile(r'^\s*(ETAPA|SUBTIPO ACTIVO|MATRIZ)\b', re.IGNORECASE)
+# Veredicto en cualquier envoltorio: "- **VEREDICTO: APROBADO**", "15. VEREDICTO: APROBADO", etc.
+_RE_VEREDICTO       = re.compile(
+    r'^\s*(?:[-•·*]\s*)?(?:\d{1,2}[\.\)]\s*)?VEREDICTO\s*:\s*'
+    r'(APROBADO|DESAPROBADO|REQUIERE_REVISION|ADVERTENCIA)\s*\.?\s*$',
+    re.IGNORECASE
+)
 
 
 def _inline(texto_plano: str) -> str:
     """Escapa el texto y convierte marcas inline de markdown a HTML."""
     t = html.escape(texto_plano)
+    # Protege el enmascarado de datos (1115****3434, 8.706***87) antes de
+    # interpretar los asteriscos como negrita, que destruiría el dato.
+    t = re.sub(r'(?<=\w)\*{2,}(?=\w)', lambda m: "\x00" * len(m.group()), t)
     t = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', t)
     t = re.sub(r'__(.+?)__', r'<strong>\1</strong>', t)
     t = re.sub(r'(?<![\*\w])\*(?!\s)([^\*]+?)(?<!\s)\*(?![\*\w])', r'<em>\1</em>', t)
     t = re.sub(r'`([^`]+)`', r'<code>\1</code>', t)
-    return t
+    return t.replace("\x00", "*")
 
 
 def _limpiar_marcas(texto: str) -> str:
@@ -171,8 +183,9 @@ def analisis_a_html_cuerpo(analisis_texto: str) -> str:
         linea = lineas[i]
         strip = linea.strip()
 
-        # 1. El veredicto se muestra en el encabezado, no en el cuerpo
-        if strip.upper().startswith("VEREDICTO:"):
+        # 1. El veredicto se muestra en el encabezado, no en el cuerpo.
+        #    Puede venir suelto, como viñeta, con negritas o dentro de un título numerado.
+        if _RE_VEREDICTO.match(_limpiar_marcas(strip)):
             i += 1
             continue
 
@@ -223,22 +236,26 @@ def analisis_a_html_cuerpo(analisis_texto: str) -> str:
             i += 1
             continue
 
-        # 6. Sección numerada: "1. RESUMEN DEL CASO"
+        # 6. Sección numerada: "1. RESUMEN DEL CASO" o "1. **Resumen del paquete**"
         m_num = _RE_TITULO_NUM.match(strip)
         if m_num:
-            resto = _limpiar_marcas(m_num.group(2))
-            # Solo es título si es corto y va en mayúsculas
+            crudo = m_num.group(2).strip()
+            resto = _limpiar_marcas(crudo)
+            # Un título numerado se reconoce si va en MAYÚSCULAS o si viene
+            # totalmente en negrita (**Resumen del paquete**), que es como lo
+            # generan varios prompts del sistema.
+            era_negrita = bool(re.fullmatch(r'\*\*.+\*\*|__.+__', crudo))
             es_titulo = (
                 len(resto) <= 90
-                and resto.upper() == resto
-                and not resto.endswith((".", ":"))
+                and not resto.endswith((".", ":", ";"))
                 and any(ch.isalpha() for ch in resto)
+                and (resto.upper() == resto or era_negrita)
             )
             if es_titulo:
                 salida.append(
                     f'<h2 class="seccion">'
                     f'<span class="num">{m_num.group(1)}</span>'
-                    f'{html.escape(resto)}</h2>'
+                    f'{html.escape(resto.upper())}</h2>'
                 )
                 i += 1
                 continue
@@ -462,6 +479,92 @@ def renderizar_analisis(analisis_texto: str, meta: dict) -> str:
 # FUNCIONES AUXILIARES
 # ══════════════════════════════════════════════════════════════
 
+def validar_clasificacion(clasificacion: dict, total_pdfs: int) -> list:
+    """
+    Audita la clasificación devuelta por el modelo.
+    Devuelve una lista de errores en texto (vacía si todo está correcto).
+    Estos errores se reinyectan al modelo en el reintento.
+    """
+    errores = []
+    casos = clasificacion.get("casos", []) or []
+    huerfanos = clasificacion.get("documentos_huerfanos", []) or []
+
+    indices_validos = set(range(total_pdfs))
+    vistos = {}          # indice -> lista de sujetos que lo reclaman
+    fuera_de_rango = []
+
+    def registrar(idx, dueno):
+        if not isinstance(idx, int):
+            fuera_de_rango.append(idx)
+            return
+        if idx not in indices_validos:
+            fuera_de_rango.append(idx)
+            return
+        vistos.setdefault(idx, []).append(dueno)
+
+    for caso in casos:
+        sujeto = caso.get("sujeto") or "SIN_SUJETO"
+        for idx in caso.get("indices_documentos", []) or []:
+            registrar(idx, sujeto)
+
+    for h in huerfanos:
+        idx = h.get("indice") if isinstance(h, dict) else None
+        if idx is not None:
+            registrar(idx, "HUERFANO")
+
+    # 1. Índices fuera de rango
+    if fuera_de_rango:
+        errores.append(
+            f"Usaste los indices {fuera_de_rango}, que NO EXISTEN. "
+            f"Se recibieron {total_pdfs} PDFs, por lo que los unicos indices validos "
+            f"son de 0 a {total_pdfs - 1}."
+        )
+
+    # 2. Índices repetidos
+    repetidos = {i: d for i, d in vistos.items() if len(d) > 1}
+    if repetidos:
+        detalle = "; ".join(f"indice {i} reclamado por {d}" for i, d in repetidos.items())
+        errores.append(f"Hay indices asignados a mas de un caso: {detalle}. Cada indice va en un solo caso.")
+
+    # 3. Índices faltantes
+    faltantes = sorted(indices_validos - set(vistos.keys()))
+    if faltantes:
+        errores.append(
+            f"Los indices {faltantes} no fueron asignados a ningun caso ni marcados como huerfanos. "
+            f"Todos los PDFs deben quedar asignados."
+        )
+
+    # 4. Cruce de titular entre docentes (la causa raíz del bug)
+    ROLES_TERCERO = {"cedula_contratista", "tarjeta_profesional"}
+    for caso in casos:
+        sujeto = (caso.get("sujeto") or "").strip().upper()
+        if not sujeto:
+            continue
+        for doc in caso.get("documentos", []) or []:
+            titular = (doc.get("titular") or "").strip().upper()
+            rol = (doc.get("rol") or "").strip().lower()
+            if not titular or titular == "DESCONOCIDO":
+                continue
+            if rol in ROLES_TERCERO:
+                continue  # excepción legítima: contratista en cesantías
+            if titular != sujeto:
+                errores.append(
+                    f"CRUCE DE DOCUMENTOS: en el caso de '{sujeto}' incluiste el documento "
+                    f"indice {doc.get('indice')} ('{doc.get('nombre')}') cuyo titular es "
+                    f"'{titular}'. Ese documento pertenece al caso de '{titular}'. Muevelo."
+                )
+
+    # 5. Coherencia de conteo
+    if clasificacion.get("cantidad_casos") is not None:
+        if clasificacion.get("cantidad_casos") != len(casos):
+            errores.append(
+                f"cantidad_casos dice {clasificacion.get('cantidad_casos')} pero el array "
+                f"'casos' tiene {len(casos)} elementos."
+            )
+
+    return errores
+
+
 def cargar_prompt(nombre: str) -> str:
     ruta = os.path.join(PROMPTS_DIR, f"{nombre}.txt")
     if not os.path.exists(ruta):
@@ -503,9 +606,28 @@ def construir_content(file_ids: list, texto_prompt: str) -> list:
     return content
 
 
-def llamada_clasificador(file_ids: list) -> dict:
-    """Clasifica el correo y detecta cuántos casos hay. Devuelve estructura multi-caso."""
+def llamada_clasificador(file_ids: list, errores_previos: list = None) -> dict:
+    """
+    Clasifica el correo y detecta cuántos casos hay. Devuelve estructura multi-caso.
+    Si se pasan errores_previos, se reinyectan al modelo para que corrija su intento anterior.
+    """
     prompt = cargar_prompt("clasificador")
+
+    if errores_previos:
+        correccion = (
+            "\n\n===============================================================\n"
+            "CORRECCION OBLIGATORIA DE TU INTENTO ANTERIOR\n"
+            "===============================================================\n"
+            f"Recibiste exactamente {len(file_ids)} PDFs. "
+            f"Los unicos indices validos son de 0 a {len(file_ids) - 1}.\n\n"
+            "Tu clasificacion anterior tuvo estos errores:\n\n"
+            + "\n".join(f"- {e}" for e in errores_previos)
+            + "\n\nVuelve a hacer el INVENTARIO documento por documento leyendo el nombre "
+              "y la cedula de cada PDF, y corrige estos errores. Ejecuta las 6 verificaciones "
+              "de la Etapa 4 antes de responder.\n"
+        )
+        prompt = prompt + correccion
+
     content = construir_content(file_ids, prompt)
 
     response = client.chat.completions.create(
@@ -717,9 +839,30 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             if not esperar_procesamiento(fid):
                 raise Exception(f"Timeout esperando procesamiento de {fid}")
 
-        # LLAMADA 1: Clasificar y detectar casos
+        # LLAMADA 1: Clasificar y detectar casos (con reintento automático)
         print("Clasificando documentos...")
-        clasificacion = llamada_clasificador(file_ids)
+        total_pdfs = len(file_ids)
+        clasificacion = None
+        errores = []
+
+        for intento in range(1, MAX_INTENTOS_CLASIFICACION + 1):
+            clasificacion = llamada_clasificador(file_ids, errores_previos=errores)
+            errores = validar_clasificacion(clasificacion, total_pdfs)
+
+            if not errores:
+                if intento > 1:
+                    print(f"  [OK] Clasificación corregida en el intento {intento}")
+                break
+
+            print(f"  [WARN] Intento {intento}/{MAX_INTENTOS_CLASIFICACION} con errores:")
+            for e in errores:
+                print(f"         - {e}")
+
+            if intento == MAX_INTENTOS_CLASIFICACION:
+                print(f"  [ERROR] Clasificación sigue con errores tras {intento} intentos. "
+                      f"Se aplicará corrección defensiva.")
+
+        clasificacion_con_errores = list(errores)
         tipo_general  = clasificacion.get("tipo", "OTRO").strip().upper()
         dependencia   = (clasificacion.get("dependencia") or "DESCONOCIDO").strip().upper()
         casos         = clasificacion.get("casos", [])
@@ -824,6 +967,8 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             "cantidad_huerfanos": len(huerfanos),
             "archivos_procesados": len(file_ids),
             "formato_salida":   FORMATO_SALIDA,
+            "clasificacion_ok": len(clasificacion_con_errores) == 0,
+            "clasificacion_errores": clasificacion_con_errores,
             "resultados":       resultados
         }
 
