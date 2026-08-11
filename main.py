@@ -1,12 +1,14 @@
 """
-MICROSERVICIO JURÍDICO v3.0
+MICROSERVICIO JURÍDICO v3.8
 Arquitectura multi-caso: un correo puede contener varios casos del mismo tipo.
 Flujo: Clasificador identifica N casos → Analizador se ejecuta N veces → Devuelve resultados[].
+NUEVO v3.8: el campo "analisis" se entrega como HTML formateado listo para Dropbox.
 """
 
 import os
 import re
 import time
+import html
 import threading
 import json
 import unicodedata
@@ -23,14 +25,17 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "3.7"
-BUILD_DATE    = "2026-07-31"
-BUILD_FIX     = "Escalafon: propagar subtipo (inscripcion/ascenso/reubicacion/reconocimiento/negacion/recurso) del clasificador al analizador y a resultados"
+BUILD_VERSION = "3.8"
+BUILD_DATE    = "2026-08-11"
+BUILD_FIX     = "Salida HTML formateada: el analisis se entrega maquetado (encabezado, badge de veredicto, tablas y estados con color) para guardarse como .html en Dropbox"
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 API_SECRET     = os.environ.get("API_SECRET", "clave_secreta_make")
 MODEL          = "gpt-5.4-mini-2026-03-17"
+
+# Formato de salida del campo "analisis": "html" o "texto"
+FORMATO_SALIDA = os.environ.get("FORMATO_SALIDA", "html").strip().lower()
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
@@ -76,7 +81,386 @@ MAPA_CARPETAS = {
 PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "prompts")
 
 
-# ── Funciones auxiliares ───────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# RENDERIZADO HTML DEL ANÁLISIS
+# ══════════════════════════════════════════════════════════════
+
+# Estados de comparación → clase CSS (ver hoja de estilos)
+ESTADOS_CLASE = {
+    "coincide":                       "ok",
+    "aportado":                       "ok",
+    "cumple":                         "ok",
+    "coincide_parcialmente":          "warn",
+    "coincide_con_validacion_manual": "warn",
+    "requiere_validacion_manual":     "warn",
+    "no_verificable":                 "warn",
+    "no_aplica":                      "neutral",
+    "no_coincide":                    "bad",
+    "faltante":                       "bad",
+    "inconsistente":                  "bad",
+}
+
+# Colores del badge de veredicto
+VEREDICTO_ESTILO = {
+    "APROBADO":          ("#0f7b3d", "#e6f6ec", "#0f7b3d"),
+    "DESAPROBADO":       ("#b3261e", "#fdecea", "#b3261e"),
+    "REQUIERE_REVISION": ("#8a5a00", "#fff5e0", "#8a5a00"),
+    "ADVERTENCIA":       ("#8a5a00", "#fff5e0", "#8a5a00"),
+}
+
+_RE_SEPARADOR_TABLA = re.compile(r'^\s*\|?[\s:|-]+\|?\s*$')
+_RE_TITULO_NUM      = re.compile(r'^\s*(\d{1,2})[\.\)]\s+(.{2,120})$')
+_RE_ETAPA           = re.compile(r'^\s*(ETAPA|SUBTIPO ACTIVO|MATRIZ)\b', re.IGNORECASE)
+
+
+def _inline(texto_plano: str) -> str:
+    """Escapa el texto y convierte marcas inline de markdown a HTML."""
+    t = html.escape(texto_plano)
+    t = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', t)
+    t = re.sub(r'__(.+?)__', r'<strong>\1</strong>', t)
+    t = re.sub(r'(?<![\*\w])\*(?!\s)([^\*]+?)(?<!\s)\*(?![\*\w])', r'<em>\1</em>', t)
+    t = re.sub(r'`([^`]+)`', r'<code>\1</code>', t)
+    return t
+
+
+def _limpiar_marcas(texto: str) -> str:
+    """
+    Quita marcas markdown conservando los guiones bajos internos.
+    Importante: los estados del sistema usan snake_case (no_aplica,
+    requiere_validacion_manual), así que solo se elimina el subrayado
+    cuando viene en pareja como marca de negrita (__texto__).
+    """
+    t = re.sub(r'__(.+?)__', r'\1', texto)   # negrita con doble guion bajo
+    t = re.sub(r'[\*`#]', '', t)             # asteriscos, comillas y almohadillas
+    return t.strip()
+
+
+def _celda(texto_plano: str) -> str:
+    """Renderiza una celda; si su contenido es un estado conocido, lo pinta."""
+    crudo = _limpiar_marcas(texto_plano).strip()
+    clave = crudo.lower().replace(" ", "_").replace("-", "_").strip(" .")
+    clase = ESTADOS_CLASE.get(clave)
+    if clase:
+        return f'<td><span class="estado {clase}">{html.escape(crudo)}</span></td>'
+    return f'<td>{_inline(texto_plano.strip())}</td>'
+
+
+def _partir_fila(linea: str) -> list:
+    return [c.strip() for c in linea.strip().strip("|").split("|")]
+
+
+def _riesgo_clase(texto: str) -> str:
+    t = texto.upper()
+    if "ALTO" in t:
+        return "bad"
+    if "MEDIO" in t:
+        return "warn"
+    if "BAJO" in t:
+        return "ok"
+    return ""
+
+
+def analisis_a_html_cuerpo(analisis_texto: str) -> str:
+    """Convierte el texto del análisis (markdown ligero) en HTML estructurado."""
+    lineas = analisis_texto.replace("\r\n", "\n").split("\n")
+    salida = []
+    i = 0
+    n = len(lineas)
+
+    while i < n:
+        linea = lineas[i]
+        strip = linea.strip()
+
+        # 1. El veredicto se muestra en el encabezado, no en el cuerpo
+        if strip.upper().startswith("VEREDICTO:"):
+            i += 1
+            continue
+
+        # 2. Línea vacía
+        if not strip:
+            i += 1
+            continue
+
+        # 3. Separadores decorativos (---, ===, ═══)
+        if re.fullmatch(r'[-=_═━]{3,}', strip):
+            salida.append('<hr>')
+            i += 1
+            continue
+
+        # 4. Bloque de tabla markdown
+        if strip.startswith("|") and strip.count("|") >= 2:
+            filas = []
+            while i < n and lineas[i].strip().startswith("|"):
+                actual = lineas[i].strip()
+                if not _RE_SEPARADOR_TABLA.match(actual):
+                    filas.append(_partir_fila(actual))
+                i += 1
+
+            if filas:
+                encabezado = filas[0]
+                cuerpo_filas = filas[1:]
+                th = "".join(
+                    f'<th>{_inline(_limpiar_marcas(c))}</th>' for c in encabezado
+                )
+                trs = []
+                for fila in cuerpo_filas:
+                    tds = "".join(_celda(c) for c in fila)
+                    trs.append(f'<tr>{tds}</tr>')
+                salida.append(
+                    '<div class="tabla-wrap"><table>'
+                    f'<thead><tr>{th}</tr></thead>'
+                    f'<tbody>{"".join(trs)}</tbody>'
+                    '</table></div>'
+                )
+            continue
+
+        # 5. Encabezados markdown (#, ##, ###)
+        m_hash = re.match(r'^(#{1,6})\s+(.*)$', strip)
+        if m_hash:
+            texto = _limpiar_marcas(m_hash.group(2))
+            nivel = "seccion" if len(m_hash.group(1)) <= 2 else "subseccion"
+            salida.append(f'<h2 class="{nivel}">{html.escape(texto)}</h2>')
+            i += 1
+            continue
+
+        # 6. Sección numerada: "1. RESUMEN DEL CASO"
+        m_num = _RE_TITULO_NUM.match(strip)
+        if m_num:
+            resto = _limpiar_marcas(m_num.group(2))
+            # Solo es título si es corto y va en mayúsculas
+            es_titulo = (
+                len(resto) <= 90
+                and resto.upper() == resto
+                and not resto.endswith((".", ":"))
+                and any(ch.isalpha() for ch in resto)
+            )
+            if es_titulo:
+                salida.append(
+                    f'<h2 class="seccion">'
+                    f'<span class="num">{m_num.group(1)}</span>'
+                    f'{html.escape(resto)}</h2>'
+                )
+                i += 1
+                continue
+
+        # 7. Línea completamente en mayúsculas → subtítulo
+        solo_texto = _limpiar_marcas(strip)
+        if (solo_texto
+                and len(solo_texto) <= 90
+                and solo_texto.upper() == solo_texto
+                and any(ch.isalpha() for ch in solo_texto)
+                and not solo_texto.startswith(("-", "•"))):
+            etiqueta = "seccion" if _RE_ETAPA.match(solo_texto) else "subseccion"
+            salida.append(f'<h3 class="{etiqueta}">{html.escape(solo_texto)}</h3>')
+            i += 1
+            continue
+
+        # 8. Lista de viñetas (agrupada)
+        if re.match(r'^[-•·*]\s+', strip):
+            items = []
+            while i < n and re.match(r'^\s*[-•·*]\s+', lineas[i]) and lineas[i].strip():
+                contenido = re.sub(r'^\s*[-•·*]\s+', '', lineas[i]).strip()
+                clase = _riesgo_clase(contenido[:30])
+                marca = f' class="li-{clase}"' if clase else ""
+                items.append(f'<li{marca}>{_inline(contenido)}</li>')
+                i += 1
+            salida.append(f'<ul>{"".join(items)}</ul>')
+            continue
+
+        # 9. Párrafo normal
+        salida.append(f'<p>{_inline(strip)}</p>')
+        i += 1
+
+    return "\n".join(salida)
+
+
+def envolver_html(cuerpo_html: str, meta: dict) -> str:
+    """Envuelve el cuerpo en la plantilla institucional completa."""
+    veredicto = (meta.get("veredicto") or "REQUIERE_REVISION").upper()
+    color, fondo, borde = VEREDICTO_ESTILO.get(veredicto, ("#555", "#f0f0f0", "#999"))
+
+    sujeto  = meta.get("sujeto") or "Documento sin sujeto identificado"
+    cedula  = meta.get("identificacion") or ""
+    tipo    = meta.get("tipo") or ""
+    subtipo = meta.get("subtipo") or ""
+    asunto  = meta.get("asunto") or ""
+    riesgo  = (meta.get("riesgo") or "").upper()
+    fecha   = meta.get("fecha") or datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
+
+    chips = []
+    if cedula:
+        chips.append(f'<span class="chip"><b>C.C.</b> {html.escape(str(cedula))}</span>')
+    if tipo:
+        chips.append(f'<span class="chip"><b>Módulo</b> {html.escape(tipo)}</span>')
+    if subtipo:
+        chips.append(f'<span class="chip"><b>Subtipo</b> {html.escape(str(subtipo))}</span>')
+    if riesgo:
+        chips.append(f'<span class="chip"><b>Riesgo</b> {html.escape(riesgo)}</span>')
+    chips.append(f'<span class="chip"><b>Fecha</b> {html.escape(fecha)}</span>')
+    chips_html = "".join(chips)
+
+    asunto_html = (
+        f'<div class="asunto">{html.escape(asunto)}</div>' if asunto else ""
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(sujeto)} — {html.escape(tipo)}</title>
+<style>
+  :root {{
+    --azul:#12395c; --azul-claro:#2e6da4; --linea:#e2e8f0;
+    --texto:#1f2933; --gris:#5b6b7b; --fondo:#eef1f5;
+  }}
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{
+    font-family:'Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif;
+    background:var(--fondo); color:var(--texto);
+    font-size:15px; line-height:1.65; padding:0 0 60px;
+  }}
+  header {{
+    background:linear-gradient(135deg,var(--azul) 0%,#1c5480 100%);
+    color:#fff; padding:26px 40px 22px;
+    border-bottom:4px solid var(--azul-claro);
+  }}
+  .inner {{ max-width:940px; margin:0 auto; }}
+  .entidad {{
+    font-size:10.5px; letter-spacing:2.2px; text-transform:uppercase;
+    opacity:.72; margin-bottom:8px; font-weight:600;
+  }}
+  header h1 {{ font-size:23px; font-weight:700; letter-spacing:.2px; }}
+  .asunto {{ font-size:13.5px; opacity:.85; margin-top:5px; font-style:italic; }}
+  .chips {{ margin-top:14px; display:flex; flex-wrap:wrap; gap:8px; }}
+  .chip {{
+    background:rgba(255,255,255,.13); border:1px solid rgba(255,255,255,.22);
+    border-radius:20px; padding:4px 13px; font-size:12px;
+  }}
+  .chip b {{ font-weight:600; opacity:.75; margin-right:4px; }}
+  .veredicto {{
+    display:inline-block; margin-top:16px; padding:9px 26px;
+    border-radius:5px; font-size:15px; font-weight:700; letter-spacing:1.1px;
+    background:{fondo}; color:{color}; border:2px solid {borde};
+  }}
+  main {{
+    max-width:940px; margin:26px auto 0; padding:34px 40px;
+    background:#fff; border-radius:8px;
+    box-shadow:0 1px 3px rgba(16,36,60,.09);
+  }}
+  h2.seccion {{
+    font-size:14.5px; font-weight:700; color:var(--azul);
+    text-transform:uppercase; letter-spacing:.6px;
+    border-left:4px solid var(--azul-claro);
+    background:#eef4fa; padding:9px 14px;
+    margin:30px 0 12px; border-radius:0 5px 5px 0;
+    display:flex; align-items:center; gap:10px;
+  }}
+  h2.seccion:first-child {{ margin-top:0; }}
+  .num {{
+    background:var(--azul-claro); color:#fff; font-size:11px;
+    width:21px; height:21px; border-radius:50%;
+    display:inline-flex; align-items:center; justify-content:center;
+    flex-shrink:0;
+  }}
+  h3.subseccion {{
+    font-size:12.5px; font-weight:700; color:var(--gris);
+    text-transform:uppercase; letter-spacing:.7px; margin:20px 0 7px;
+  }}
+  h3.seccion {{
+    font-size:13.5px; font-weight:700; color:var(--azul);
+    border-left:3px solid var(--azul-claro); background:#f3f7fb;
+    padding:7px 12px; margin:24px 0 10px; border-radius:0 4px 4px 0;
+    text-transform:uppercase; letter-spacing:.5px;
+  }}
+  p {{ margin:0 0 8px; }}
+  ul {{ margin:6px 0 14px 4px; list-style:none; }}
+  li {{
+    position:relative; padding-left:18px; margin-bottom:6px;
+  }}
+  li::before {{
+    content:""; position:absolute; left:2px; top:.62em;
+    width:6px; height:6px; border-radius:50%; background:var(--azul-claro);
+  }}
+  li.li-bad::before {{ background:#b3261e; }}
+  li.li-warn::before {{ background:#c98a00; }}
+  li.li-ok::before  {{ background:#0f7b3d; }}
+  .tabla-wrap {{
+    overflow-x:auto; margin:12px 0 20px;
+    border:1px solid var(--linea); border-radius:7px;
+  }}
+  table {{ width:100%; border-collapse:collapse; font-size:13.5px; }}
+  th {{
+    background:var(--azul); color:#fff; text-align:left;
+    padding:10px 14px; font-weight:600; font-size:12.5px;
+    text-transform:uppercase; letter-spacing:.4px; white-space:nowrap;
+  }}
+  td {{ padding:9px 14px; border-top:1px solid var(--linea); vertical-align:top; }}
+  tbody tr:nth-child(even) {{ background:#f7fafc; }}
+  tbody tr:hover {{ background:#eef4fa; }}
+  .estado {{
+    display:inline-block; padding:3px 11px; border-radius:14px;
+    font-size:11.5px; font-weight:600; white-space:nowrap;
+  }}
+  .estado.ok      {{ background:#e6f6ec; color:#0f7b3d; border:1px solid #b7e4c7; }}
+  .estado.warn    {{ background:#fff5e0; color:#8a5a00; border:1px solid #f3d9a0; }}
+  .estado.bad     {{ background:#fdecea; color:#b3261e; border:1px solid #f5c2bd; }}
+  .estado.neutral {{ background:#eef1f5; color:#5b6b7b; border:1px solid #d5dce4; }}
+  code {{
+    background:#eef1f5; padding:1px 6px; border-radius:4px;
+    font-family:Consolas,Monaco,monospace; font-size:12.5px;
+  }}
+  hr {{ border:0; border-top:1px solid var(--linea); margin:22px 0; }}
+  footer {{
+    max-width:940px; margin:18px auto 0; padding:0 40px;
+    font-size:11px; color:#9aa5b1; text-align:center;
+  }}
+  @media print {{
+    body {{ background:#fff; }}
+    main {{ box-shadow:none; padding:0; }}
+    header {{ background:var(--azul) !important; -webkit-print-color-adjust:exact; }}
+  }}
+  @media (max-width:640px) {{
+    header, main {{ padding-left:18px; padding-right:18px; }}
+    main {{ border-radius:0; }}
+  }}
+</style>
+</head>
+<body>
+<header>
+  <div class="inner">
+    <div class="entidad">Secretaría Distrital de Educación de Barranquilla · Revisión jurídica automatizada</div>
+    <h1>{html.escape(sujeto)}</h1>
+    {asunto_html}
+    <div class="chips">{chips_html}</div>
+    <div class="veredicto">VEREDICTO: {html.escape(veredicto)}</div>
+  </div>
+</header>
+<main>
+{cuerpo_html}
+</main>
+<footer>
+  Documento generado automáticamente por juridico-service v{BUILD_VERSION} · {html.escape(fecha)}<br>
+  Este análisis es una revisión preliminar y no sustituye el criterio del abogado revisor.
+</footer>
+</body>
+</html>"""
+
+
+def renderizar_analisis(analisis_texto: str, meta: dict) -> str:
+    """Punto de entrada: devuelve HTML o el texto crudo según FORMATO_SALIDA."""
+    if FORMATO_SALIDA != "html":
+        return analisis_texto
+    try:
+        return envolver_html(analisis_a_html_cuerpo(analisis_texto), meta)
+    except Exception as e:
+        print(f"[WARN] Falló el render HTML, se devuelve texto plano: {e}")
+        return analisis_texto
+
+
+# ══════════════════════════════════════════════════════════════
+# FUNCIONES AUXILIARES
+# ══════════════════════════════════════════════════════════════
 
 def cargar_prompt(nombre: str) -> str:
     ruta = os.path.join(PROMPTS_DIR, f"{nombre}.txt")
@@ -266,16 +650,26 @@ def construir_advertencia_huerfanos(huerfanos: list, message_id: str) -> dict:
     """Genera un archivo de advertencia con los PDFs no emparejados."""
     fecha = datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
 
-    contenido = f"ADVERTENCIA - DOCUMENTOS NO EMPAREJADOS\n"
-    contenido += f"Correo: {message_id}\n"
-    contenido += f"Fecha: {fecha}\n\n"
-    contenido += f"Se detectaron {len(huerfanos)} documento(s) que no pudieron asociarse a ningún caso:\n\n"
+    contenido = "DOCUMENTOS NO EMPAREJADOS\n\n"
+    contenido += f"Correo de origen: {message_id}\n"
+    contenido += f"Fecha de procesamiento: {fecha}\n\n"
+    contenido += f"Se detectaron {len(huerfanos)} documento(s) que no pudieron asociarse a ningún caso.\n\n"
 
+    contenido += "DETALLE\n\n"
     for h in huerfanos:
-        contenido += f"- {h.get('nombre', 'Documento sin nombre')}\n"
-        contenido += f"  Razón: {h.get('razon', 'No especificada')}\n\n"
+        contenido += f"- {h.get('nombre', 'Documento sin nombre')} — Razón: {h.get('razon', 'No especificada')}\n"
 
-    contenido += "\nSe recomienda revisar el correo original y enviar los documentos completos si es necesario.\n"
+    contenido += "\nRECOMENDACION\n\n"
+    contenido += "- Revisar el correo original y verificar que los soportes correspondan a un caso identificable.\n"
+    contenido += "- Reenviar el expediente completo si faltan documentos principales.\n"
+
+    meta = {
+        "sujeto":        "Advertencia del sistema",
+        "asunto":        "Documentos que no pudieron asociarse a ningún caso",
+        "tipo":          "ADVERTENCIA",
+        "veredicto":     "ADVERTENCIA",
+        "fecha":         fecha,
+    }
 
     return {
         "tipo":            "ADVERTENCIA",
@@ -284,7 +678,8 @@ def construir_advertencia_huerfanos(huerfanos: list, message_id: str) -> dict:
         "sujeto":          None,
         "identificacion":  None,
         "veredicto":       "ADVERTENCIA",
-        "analisis":        contenido,
+        "analisis":        renderizar_analisis(contenido, meta),
+        "analisis_texto":  contenido,
         "message_id":      message_id,
         "cantidad_huerfanos": len(huerfanos)
     }
@@ -361,6 +756,7 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
         print(f"Tipo general: {tipo_general} | Casos detectados: {len(casos)} | Huérfanos: {len(huerfanos)}")
 
         resultados = []
+        fecha_hoy = datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
 
         # LLAMADA 2..N: Analizar cada caso por separado
         for i, caso in enumerate(casos, start=1):
@@ -385,6 +781,18 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
 
             print(f"  Veredicto: {veredicto} | Carpeta: {carpeta}")
 
+            # ── Metadatos para el encabezado del HTML ──
+            meta_html = {
+                "sujeto":         caso.get("sujeto"),
+                "identificacion": caso.get("identificacion"),
+                "tipo":           tipo_general,
+                "subtipo":        caso.get("subtipo"),
+                "asunto":         (caso.get("asunto") or "").strip(),
+                "riesgo":         (caso.get("riesgo") or "MEDIO").strip().upper(),
+                "veredicto":      veredicto,
+                "fecha":          fecha_hoy,
+            }
+
             resultados.append({
                 "tipo":            tipo_general,
                 "dependencia":     dependencia,
@@ -399,7 +807,8 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
                 "veredicto":       veredicto,
                 "carpeta":         carpeta,
                 "nombre_archivo":  nombre,
-                "analisis":        analisis,
+                "analisis":        renderizar_analisis(analisis, meta_html),
+                "analisis_texto":  analisis,
                 "message_id":      message_id
             })
 
@@ -414,6 +823,7 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             "cantidad_casos":   len(casos),
             "cantidad_huerfanos": len(huerfanos),
             "archivos_procesados": len(file_ids),
+            "formato_salida":   FORMATO_SALIDA,
             "resultados":       resultados
         }
 
@@ -426,17 +836,119 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
 @app.route("/version", methods=["GET"])
 def version():
     return jsonify({
-        "version":    BUILD_VERSION,
-        "build_date": BUILD_DATE,
-        "fix":        BUILD_FIX,
-        "model":      MODEL,
-        "status":     "ok"
+        "version":         BUILD_VERSION,
+        "build_date":      BUILD_DATE,
+        "fix":             BUILD_FIX,
+        "model":           MODEL,
+        "formato_salida":  FORMATO_SALIDA,
+        "status":          "ok"
     })
 
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "version": BUILD_VERSION})
+
+
+@app.route("/preview", methods=["GET", "POST"])
+def preview():
+    """
+    Vista previa del diseño HTML sin gastar llamadas a OpenAI.
+    GET  → renderiza un análisis de ejemplo.
+    POST → recibe {"analisis": "...", "meta": {...}} y devuelve el HTML.
+    """
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        texto = data.get("analisis", "")
+        meta  = data.get("meta", {})
+        return renderizar_analisis(texto, meta), 200, {"Content-Type": "text/html; charset=utf-8"}
+
+    # AVISO: datos ficticios, usados únicamente para previsualizar el diseño.
+    ejemplo = """1. RESUMEN DEL CASO
+
+Docente: **NOMBRE APELLIDO DE PRUEBA**
+Cédula: **00.000.000**
+Subtipo detectado: **cesantia_parcial_remodelacion_vivienda**
+Inmueble: Calle 00 No. 00-00, Barrio de Prueba, Ciudad
+Valor reconocido en el acto: **$00.000.000**
+
+2. SUBTIPO IDENTIFICADO
+
+Se clasifica como remodelación porque los soportes incluyen contrato civil de obra,
+certificado de tradición y documentos del contratista. No hay soportes educativos.
+
+3. MATRIZ DE IDENTIDAD
+
+| Campo | En el acto | En la cédula del docente | Resultado |
+|---|---|---|---|
+| Nombre | NOMBRE APELLIDO DE PRUEBA | NOMBRE APELLIDO DE PRUEBA | coincide |
+| Cédula | 00.000.000 | 00.000.000 | coincide |
+
+4. MATRIZ DE VALORES
+
+| Concepto | Valor soportado | Valor reconocido | Resultado |
+|---|---|---|---|
+| Valor del contrato de obra | $00.000.000 | $00.000.000 | coincide |
+| Saldo a pagar | $00.000.000 | $00.000.000 | coincide |
+
+5. MATRIZ DE CUENTA BANCARIA
+
+| Titular | Banco | Tipo de cuenta | Número | Coincide con beneficiario | Resultado |
+|---|---|---|---|---|---|
+| NOMBRE APELLIDO DE PRUEBA | Banco de prueba | Cuenta de ahorro | 000-000000-00 | Sí | coincide |
+
+6. MATRIZ INMUEBLE
+
+| Matrícula | Dirección | Titular | Docente es propietario | Resultado |
+|---|---|---|---|---|
+| 000-000000 | Calle 00 No. 00-00 | Antecedentes de dominio de terceros | Sí | coincide_con_validacion_manual |
+
+7. MATRIZ OBRA
+
+| Contratante | Contratista | Objeto | Valor del contrato | Resultado |
+|---|---|---|---|---|
+| NOMBRE APELLIDO DE PRUEBA | CONTRATISTA DE PRUEBA | Remodelación de vivienda | $00.000.000 | coincide |
+
+8. DOCUMENTOS FALTANTES
+
+| Documento | Carácter | Estado |
+|---|---|---|
+| Acto administrativo | Obligatorio | aportado |
+| Cédula del docente | Obligatorio | aportado |
+| Tarjeta profesional del contratista | Complementario | no_aplica |
+| Soporte de parentesco | No aplica al subtipo | no_aplica |
+
+9. RIESGOS DETECTADOS
+
+- ALTO: no se detectaron riesgos de nivel alto.
+- MEDIO: el certificado de tradición registra antecedentes de terceros.
+- BAJO: la cédula del contratista está correctamente asociada al contrato.
+
+10. RECOMENDACION FINAL
+
+VIABLE CON VALIDACIÓN MANUAL: el expediente está bien estructurado y solo requiere
+confirmar la situación dominial actual del inmueble.
+
+11. NOTA PARA EL ABOGADO REVISOR
+
+Documento de demostración generado con datos ficticios. No corresponde a ningún
+expediente real ni a ninguna persona identificable.
+
+VEREDICTO: APROBADO"""
+
+    meta = {
+        "sujeto": "NOMBRE APELLIDO DE PRUEBA",
+        "identificacion": "00000000",
+        "tipo": "CESANTIAS",
+        "subtipo": "cesantia_parcial_remodelacion_vivienda",
+        "asunto": "Vista previa del formato — datos ficticios de demostración",
+        "riesgo": "BAJO",
+        "veredicto": "APROBADO",
+        "fecha": datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d"),
+    }
+    return envolver_html(analisis_a_html_cuerpo(ejemplo), meta), 200, {
+        "Content-Type": "text/html; charset=utf-8"
+    }
 
 
 # ── Endpoint principal ─────────────────────────────────────────
