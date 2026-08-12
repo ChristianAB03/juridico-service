@@ -26,13 +26,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "4.1"
+BUILD_VERSION = "4.2"
 BUILD_DATE    = "2026-08-12"
-BUILD_FIX     = ("Integridad documental por codigo: la matriz de procedencia del analizador se "
-                 "parsea en Python y se verifica que ninguna cedula marcada NO reaparezca despues "
-                 "en el analisis. Si se detecta contaminacion, se reintenta con el error concreto; "
-                 "si persiste, el veredicto se fuerza a DESAPROBADO. Corregida contradiccion interna "
-                 "en escalafon.txt sobre documentos ajenos como riesgo. Alcance: solo modulo ESCALAFON.")
+BUILD_FIX     = ("Integridad documental por codigo con severidades separadas: la contaminacion real entre expedientes (usar un documento marcado NO) bloquea y fuerza DESAPROBADO; los defectos de inventario (conteo de filas, duplicados) solo generan avisos y se reinyectan en el reintento, sin castigar el veredicto. Alcance: solo modulo ESCALAFON.")
 
 # Intentos máximos de clasificación antes de aplicar corrección defensiva
 MAX_INTENTOS_CLASIFICACION = 3
@@ -792,33 +788,62 @@ def extraer_matriz_procedencia(texto: str):
     return filas, offset_fin_tabla
 
 
-def validar_analisis_escalafon(texto: str, caso: dict, total_pdfs_enviados: int) -> list:
+def validar_analisis_escalafon(texto: str, caso: dict, total_pdfs_enviados: int) -> tuple:
     """
-    Verifica que el análisis de ESCALAFÓN no use, después de su propia matriz de
-    procedencia, ningún documento que él mismo marcó como NO perteneciente a este
-    docente. Devuelve una lista de errores en texto (vacía si está limpio).
+    Audita la integridad documental del análisis de ESCALAFÓN y devuelve una tupla
+    (bloqueantes, advertencias).
 
-    Es deliberadamente conservador: solo dispara cuando encuentra la cédula exacta
-    de un documento excluido repetida más adelante. No intenta entender lenguaje
-    natural ni juzga la calidad jurídica del análisis, solo la integridad documental.
+    BLOQUEANTES: contaminación real entre expedientes, es decir, el análisis usa
+    después de su propia matriz de procedencia un documento que él mismo marcó
+    como NO perteneciente a este docente. Fuerzan reintento y, si persisten,
+    veredicto DESAPROBADO. Un dato de otra persona puede cambiar el sentido
+    jurídico del acto, así que aquí se falla en cerrado.
+
+    ADVERTENCIAS: defectos de forma del inventario (conteo de filas que no cuadra,
+    filas duplicadas). Indican que el modelo leyó mal el lote, pero no implican por
+    sí solos que el análisis esté contaminado. Se registran para diagnóstico y se
+    reinyectan en el reintento, pero NUNCA fuerzan el veredicto: castigar por esto
+    produciría falsos DESAPROBADO en análisis cuyo contenido es correcto.
     """
-    errores = []
+    bloqueantes = []
+    advertencias = []
 
     filas, offset_fin_tabla = extraer_matriz_procedencia(texto)
 
     if not filas:
-        errores.append(
+        # Sin matriz no hay nada que auditar: no se puede afirmar que el análisis
+        # esté limpio, así que esto sí bloquea.
+        bloqueantes.append(
             "No se encontro una tabla con formato markdown debajo del encabezado "
             "'MATRIZ DE PROCEDENCIA' (seccion 2). Es obligatoria: una fila numerada "
             "por cada PDF recibido, con columnas Documento, Cedula, Dato clave y "
             "Pertenece a este docente (SI/NO)."
         )
-        return errores
+        return bloqueantes, advertencias
 
     if len(filas) != total_pdfs_enviados:
-        errores.append(
+        advertencias.append(
             f"Tu MATRIZ DE PROCEDENCIA tiene {len(filas)} fila(s) pero se te enviaron "
-            f"{total_pdfs_enviados} PDFs. Debe haber exactamente una fila por cada PDF recibido."
+            f"{total_pdfs_enviados} PDFs. Debe haber exactamente una fila por cada PDF "
+            f"recibido, sin repetir ninguno y sin omitir ninguno. No rellenes la tabla "
+            f"duplicando documentos para alcanzar el numero: si un documento no lo "
+            f"pudiste leer, dilo en su fila."
+        )
+
+    # Filas duplicadas: sintoma de que el modelo relleno la tabla en vez de leer
+    # cada PDF. Es un defecto de inventario, no contaminacion.
+    vistos = {}
+    for f in filas:
+        firma = (_normalizar_ascii(f["documento"]), _normalizar_ascii(f["dato_clave"]))
+        if not any(firma):
+            continue
+        vistos[firma] = vistos.get(firma, 0) + 1
+    repetidas = [f"'{d}' ({n} veces)" for (d, _), n in vistos.items() if n > 1]
+    if repetidas:
+        advertencias.append(
+            f"Tu MATRIZ DE PROCEDENCIA repite el mismo documento en varias filas: "
+            f"{'; '.join(repetidas)}. Cada PDF distinto va en una sola fila con su "
+            f"propio contenido; no dupliques entradas."
         )
 
     cedula_propia = _normalizar_cedula(str(caso.get("identificacion") or ""))
@@ -843,7 +868,7 @@ def validar_analisis_escalafon(texto: str, caso: dict, total_pdfs_enviados: int)
                 (f["documento"] for f in filas if f["cedula"] == ced and f["pertenece"] == "NO"),
                 "documento no identificado"
             )
-            errores.append(
+            bloqueantes.append(
                 f"CONTAMINACION DETECTADA: marcaste el documento '{doc_origen}' (cedula {ced}) "
                 f"como NO perteneciente a este docente en tu matriz de procedencia, pero esa misma "
                 f"cedula vuelve a aparecer despues en tu analisis. Revisa TODAS las matrices "
@@ -892,7 +917,7 @@ def validar_analisis_escalafon(texto: str, caso: dict, total_pdfs_enviados: int)
                     t for t in tokens_doc if _hay_coincidencia_difusa(t, candidatos_bloque)
                 )
                 if encontrados:
-                    errores.append(
+                    bloqueantes.append(
                         f"CONTAMINACION DETECTADA: el documento '{doc['documento']}' "
                         f"('{doc['dato_clave']}') fue marcado NO en tu matriz de procedencia "
                         f"(no pertenece a este docente), pero en tu {nombre_seccion} aparecen los "
@@ -902,7 +927,7 @@ def validar_analisis_escalafon(texto: str, caso: dict, total_pdfs_enviados: int)
                     )
                     break  # un aviso por seccion evita ruido repetido
 
-    return errores
+    return bloqueantes, advertencias
 
 
 def cargar_prompt(nombre: str) -> str:
@@ -1371,34 +1396,40 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             # documental de la propia respuesta (ver validar_analisis_escalafon) y se
             # reintenta si se detecta contaminación entre expedientes. El resto de
             # módulos sigue exactamente el flujo anterior, sin cambios de comportamiento.
-            errores_integridad = []
+            bloqueantes = []
+            advertencias = []
             intentos_permitidos = MAX_INTENTOS_ANALISIS_ESCALAFON if tipo_general == "ESCALAFON" else 1
 
             for intento_an in range(1, intentos_permitidos + 1):
                 analisis = llamada_analizador(
                     file_ids_caso, tipo_general, caso, tipo_general, dependencia,
                     otros_sujetos=otros_sujetos, modo=modo,
-                    errores_previos=errores_integridad
+                    errores_previos=(bloqueantes + advertencias)
                 )
 
                 if tipo_general != "ESCALAFON":
-                    errores_integridad = []
+                    bloqueantes, advertencias = [], []
                     break
 
-                errores_integridad = validar_analisis_escalafon(
+                bloqueantes, advertencias = validar_analisis_escalafon(
                     analisis, caso, total_pdfs_enviados=len(file_ids_caso)
                 )
-                if not errores_integridad:
+
+                if advertencias:
+                    for a in advertencias:
+                        print(f"  [AVISO] {a}")
+
+                if not bloqueantes:
                     if intento_an > 1:
                         print(f"  [OK] Analisis corregido en el intento {intento_an}")
                     break
 
                 print(f"  [WARN] Intento {intento_an}/{intentos_permitidos} de analisis "
-                      f"con posible contaminacion documental:")
-                for e in errores_integridad:
+                      f"con contaminacion documental:")
+                for e in bloqueantes:
                     print(f"         - {e}")
 
-            integridad_ok = not errores_integridad
+            integridad_ok = not bloqueantes
 
             if integridad_ok:
                 veredicto = extraer_veredicto(analisis)
@@ -1416,14 +1447,15 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
                     "estuviera libre de datos de otro expediente del mismo correo. Requiere "
                     "revision manual completa del abogado antes de cualquier decision.\n\n"
                     "Detalle tecnico para el revisor:\n"
-                    + "\n".join(f"- {e}" for e in errores_integridad)
+                    + "\n".join(f"- {e}" for e in bloqueantes)
                 )
 
             carpeta   = MAPA_CARPETAS.get((tipo_general, veredicto), "OTRO")
             nombre    = construir_nombre_archivo(caso, tipo_general, message_id)
 
             print(f"  Veredicto: {veredicto} | Carpeta: {carpeta}"
-                  + ("" if integridad_ok else " | INTEGRIDAD: FALLO (revision manual forzada)"))
+                  + ("" if integridad_ok else " | INTEGRIDAD: FALLO (revision manual forzada)")
+                  + (f" | {len(advertencias)} aviso(s) de inventario" if advertencias else ""))
 
             # ── Metadatos para el encabezado del HTML ──
             meta_html = {
@@ -1454,7 +1486,8 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
                 "analisis":        renderizar_analisis(analisis, meta_html),
                 "analisis_texto":  analisis,
                 "integridad_documental_ok": integridad_ok,
-                "errores_integridad": errores_integridad,
+                "errores_integridad": bloqueantes,
+                "avisos_inventario": advertencias,
                 "message_id":      message_id
             })
 

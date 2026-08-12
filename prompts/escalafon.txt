@@ -431,6 +431,11 @@ Redacta en prosa breve: docente, cédula, trámite detectado, grado y nivel, y e
 Una fila numerada por cada PDF recibido, sin excepción: si recibiste diez PDFs, la tabla tiene diez
 filas numeradas del 1 al 10. En la última columna escribe SI o NO.
 
+NO RELLENES la tabla repitiendo documentos para alcanzar el número de filas. Cada fila corresponde a
+un PDF distinto, con su propio contenido. Si un documento no lo pudiste leer bien, escríbelo así en
+su fila: documento "ilegible o no identificado", titular "DESCONOCIDO", y NO en la última columna.
+Es preferible una fila honesta que diga que no pudiste leerlo, a una fila duplicada de otro documento.
+
 Recibir documentos de otras personas es NORMAL cuando el correo trae varios expedientes: NO lo
 reportes como riesgo (regla completa en el Paso 1.2). Los documentos marcados NO simplemente quedan
 fuera del resto del análisis.
