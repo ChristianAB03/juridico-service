@@ -26,9 +26,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "4.2"
+BUILD_VERSION = "4.3"
 BUILD_DATE    = "2026-08-12"
-BUILD_FIX     = ("Integridad documental por codigo con severidades separadas: la contaminacion real entre expedientes (usar un documento marcado NO) bloquea y fuerza DESAPROBADO; los defectos de inventario (conteo de filas, duplicados) solo generan avisos y se reinyectan en el reintento, sin castigar el veredicto. Alcance: solo modulo ESCALAFON.")
+BUILD_FIX     = ("Corregido falso positivo del detector de contaminacion: los tokens que son variantes morfologicas de palabras genericas del dominio ('pedagogia' vs 'pedagogica') ya no sirven como ancla, porque coincidian con nombres de institucion legitimos. Severidades separadas: contaminacion bloquea, defectos de inventario solo avisan. Alcance: solo ESCALAFON.")
 
 # Intentos máximos de clasificación antes de aplicar corrección defensiva
 MAX_INTENTOS_CLASIFICACION = 3
@@ -630,10 +630,12 @@ _RE_DIGITOS           = re.compile(r'\d{5,}')
 # (aparecerían en casi cualquier expediente y generarían falsos positivos).
 _STOPWORDS_DOMINIO = {
     "grado", "nivel", "docente", "profesional", "certificado", "diplomado",
-    "programa", "formacion", "pedagogica", "pedagogico", "educacion",
-    "institucion", "universidad", "resolucion", "acto", "titulo", "curso",
-    "licenciados", "escalafon", "nacional", "distrital", "secretaria",
-    "horas", "credito", "creditos", "fecha", "numero",
+    "programa", "formacion", "pedagogia", "pedagogica", "pedagogico", "educacion",
+    "educativa", "educativo", "institucion", "universidad", "universitaria",
+    "resolucion", "acto", "titulo", "curso", "licenciado", "licenciados",
+    "escalafon", "nacional", "distrital", "secretaria", "colombia",
+    "horas", "credito", "creditos", "fecha", "numero", "basica", "basico",
+    "estrategias", "competencias", "aprendizaje", "dificultades",
 }
 
 
@@ -646,20 +648,38 @@ def _normalizar_ascii(texto: str) -> str:
     return re.sub(r'\s+', ' ', t).strip()
 
 
+def _es_variante_de_generica(token: str, umbral: float = 0.82) -> bool:
+    """
+    True si el token es una palabra genérica del dominio o una variante morfológica
+    suya ('pedagogia' vs 'pedagogica', 'universitaria' vs 'universidad'). Estas
+    palabras aparecen en casi cualquier expediente y no sirven como evidencia de
+    que un documento ajeno se haya filtrado: usarlas como ancla produce falsos
+    positivos (caso real: 'pedagogia' del diplomado de otro docente coincidiendo
+    con 'Universidad Pedagogica y Tecnologica' del titulo propio).
+    """
+    if token in _STOPWORDS_DOMINIO:
+        return True
+    if token.isdigit():
+        return False
+    return any(
+        difflib.SequenceMatcher(None, token, sw).ratio() >= umbral
+        for sw in _STOPWORDS_DOMINIO
+    )
+
+
 def _tokens_clave(texto: str) -> set:
     """
     Tokens 'anclables' de una frase: alfabéticos de 5+ letras o numéricos de 3+
-    dígitos, quitando las palabras genéricas del dominio. Words like "Areandina",
-    "Biologo", "Politecnico", "1485" sobreviven; "grado", "formacion" no.
+    dígitos, quitando las palabras genéricas del dominio y sus variantes.
+    Sobreviven "Areandina", "Biologo", "Politecnico", "Historiador", "1485";
+    no sobreviven "grado", "formacion", "pedagogia", "pedagogica".
     """
     normal = _normalizar_ascii(texto)
     tokens = set()
     for tok in normal.split():
-        if tok in _STOPWORDS_DOMINIO:
-            continue
         if tok.isdigit() and len(tok) >= 3:
             tokens.add(tok)
-        elif tok.isalpha() and len(tok) >= 5:
+        elif tok.isalpha() and len(tok) >= 5 and not _es_variante_de_generica(tok):
             tokens.add(tok)
     return tokens
 
