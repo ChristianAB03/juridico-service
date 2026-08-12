@@ -12,6 +12,7 @@ import html
 import threading
 import json
 import unicodedata
+import difflib
 from datetime import datetime, timezone, timedelta
 
 # Zona horaria de Colombia (UTC-5)
@@ -25,12 +26,22 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "4.0"
-BUILD_DATE    = "2026-08-11"
-BUILD_FIX     = "Arquitectura de expediente completo: cada analizador recibe todos los PDFs del correo y determina por si mismo cuales le pertenecen mediante la matriz de procedencia. El clasificador ya no reparte documentos."
+BUILD_VERSION = "4.1"
+BUILD_DATE    = "2026-08-12"
+BUILD_FIX     = ("Integridad documental por codigo: la matriz de procedencia del analizador se "
+                 "parsea en Python y se verifica que ninguna cedula marcada NO reaparezca despues "
+                 "en el analisis. Si se detecta contaminacion, se reintenta con el error concreto; "
+                 "si persiste, el veredicto se fuerza a DESAPROBADO. Corregida contradiccion interna "
+                 "en escalafon.txt sobre documentos ajenos como riesgo. Alcance: solo modulo ESCALAFON.")
 
 # Intentos máximos de clasificación antes de aplicar corrección defensiva
 MAX_INTENTOS_CLASIFICACION = 3
+
+# Intentos máximos del ANALIZADOR de escalafón cuando se detecta contaminación entre
+# expedientes (documento marcado NO en la matriz de procedencia que reaparece después).
+# No aplica a otros módulos. Cada reintento reenvía los mismos PDFs (ya subidos), así que
+# el costo extra es solo de completion, no de subida de archivos.
+MAX_INTENTOS_ANALISIS_ESCALAFON = int(os.environ.get("MAX_INTENTOS_ANALISIS_ESCALAFON", "2"))
 
 # Modo de entrega de PDFs al analizador:
 #   "completo" → cada caso recibe TODOS los PDFs del correo y filtra por procedencia.
@@ -598,6 +609,302 @@ def validar_clasificacion(clasificacion: dict, total_pdfs: int, modo: str = "com
     return errores
 
 
+# ══════════════════════════════════════════════════════════════
+# INTEGRIDAD DOCUMENTAL DEL ANALIZADOR (solo módulo ESCALAFÓN)
+# ══════════════════════════════════════════════════════════════
+#
+# validar_clasificacion() (arriba) audita el JSON del CLASIFICADOR.
+# Lo de aquí abajo audita el TEXTO del ANALIZADOR: concretamente, que
+# ningún documento marcado "NO" en su propia matriz de procedencia
+# (sección 2 de su salida) sea usado como soporte más adelante en el
+# mismo análisis. Es el mismo patrón (parsear una afirmación
+# estructurada del modelo y verificarla en código) aplicado al punto
+# donde de verdad se produce la contaminación entre expedientes.
+#
+# El ancla es la CÉDULA: es un token numérico rígido que un regex
+# extrae y compara con exactitud, sin necesitar NLP. El prompt ya
+# prohíbe enmascarar cédulas con asteriscos precisamente para que
+# esta verificación sea posible.
+
+_RE_FILA_PROCEDENCIA = re.compile(r'^\s*\|(.+)\|\s*$')
+_RE_ES_SEPARADOR      = re.compile(r'^[\s|:\-]+$')
+_RE_DIGITOS           = re.compile(r'\d{5,}')
+
+# Palabras demasiado genéricas en este dominio para servir de ancla por sí solas
+# (aparecerían en casi cualquier expediente y generarían falsos positivos).
+_STOPWORDS_DOMINIO = {
+    "grado", "nivel", "docente", "profesional", "certificado", "diplomado",
+    "programa", "formacion", "pedagogica", "pedagogico", "educacion",
+    "institucion", "universidad", "resolucion", "acto", "titulo", "curso",
+    "licenciados", "escalafon", "nacional", "distrital", "secretaria",
+    "horas", "credito", "creditos", "fecha", "numero",
+}
+
+
+def _normalizar_ascii(texto: str) -> str:
+    """minúsculas, sin tildes, solo alfanumérico y espacios."""
+    t = unicodedata.normalize("NFD", texto or "")
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    t = t.lower()
+    t = re.sub(r'[^a-z0-9\s]', ' ', t)
+    return re.sub(r'\s+', ' ', t).strip()
+
+
+def _tokens_clave(texto: str) -> set:
+    """
+    Tokens 'anclables' de una frase: alfabéticos de 5+ letras o numéricos de 3+
+    dígitos, quitando las palabras genéricas del dominio. Words like "Areandina",
+    "Biologo", "Politecnico", "1485" sobreviven; "grado", "formacion" no.
+    """
+    normal = _normalizar_ascii(texto)
+    tokens = set()
+    for tok in normal.split():
+        if tok in _STOPWORDS_DOMINIO:
+            continue
+        if tok.isdigit() and len(tok) >= 3:
+            tokens.add(tok)
+        elif tok.isalpha() and len(tok) >= 5:
+            tokens.add(tok)
+    return tokens
+
+
+def _candidatos_difusos(texto: str) -> set:
+    """
+    Candidatos de comparación para el lado del BLOQUE (texto libre del modelo),
+    tolerantes a que un nombre propio se escriba junto o separado ("Areandina"
+    vs "Área Andina", visto en los documentos reales de este proyecto). Incluye
+    palabras sueltas y concatenaciones de palabras adyacentes de 3+ letras.
+    """
+    normal = _normalizar_ascii(texto)
+    palabras = [p for p in normal.split() if len(p) >= 3]
+    candidatos = set(palabras)
+    for i in range(len(palabras) - 1):
+        candidatos.add(palabras[i] + palabras[i + 1])
+    return candidatos
+
+
+def _hay_coincidencia_difusa(token_doc: str, candidatos_bloque: set, umbral: float = 0.85) -> bool:
+    """
+    True si token_doc (alfabético, del documento excluido) coincide de forma
+    exacta o aproximada con algún candidato del bloque. Los tokens numéricos se
+    comparan aparte, siempre de forma exacta (una cifra legal no admite tolerancia).
+    """
+    if token_doc in candidatos_bloque:
+        return True
+    if token_doc.isdigit():
+        return False
+    mejor = max(
+        (difflib.SequenceMatcher(None, token_doc, cand).ratio() for cand in candidatos_bloque),
+        default=0.0,
+    )
+    return mejor >= umbral
+
+
+def _normalizar_cedula(texto: str):
+    """Extrae el primer número de 5+ dígitos de una celda, sin puntos ni espacios."""
+    if not texto:
+        return None
+    m = _RE_DIGITOS.search(texto.replace(".", "").replace(" ", ""))
+    return m.group(0) if m else None
+
+
+def _es_afirmativo(texto: str) -> bool:
+    t = (texto or "").strip().upper()
+    return t.startswith("S") and "NO" not in t.split()[:1]  # "SI", "SÍ", "Si." ...
+
+
+def _es_negativo(texto: str) -> bool:
+    t = (texto or "").strip().upper()
+    return t.startswith("NO")
+
+
+def extraer_matriz_procedencia(texto: str):
+    """
+    Localiza la tabla markdown que sigue al encabezado "MATRIZ DE PROCEDENCIA"
+    y devuelve (filas, offset_fin_tabla). offset_fin_tabla es la posición de
+    caracter donde termina la tabla, para poder aislar "todo lo que viene después".
+    filas = lista de dicts: {"documento", "cedula", "dato_clave", "pertenece"}.
+    Devuelve ([], None) si no encuentra la tabla.
+    """
+    m_enc = re.search(r'MATRIZ\s+DE\s+PROCEDENCIA', texto, re.IGNORECASE)
+    if not m_enc:
+        return [], None
+
+    resto = texto[m_enc.end():]
+    lineas = resto.split("\n")
+
+    inicio_tabla = None
+    for idx, linea in enumerate(lineas):
+        if linea.strip().startswith("|"):
+            inicio_tabla = idx
+            break
+    if inicio_tabla is None:
+        return [], None
+
+    filas_crudas = []
+    fin_tabla_idx = inicio_tabla
+    for idx in range(inicio_tabla, len(lineas)):
+        linea = lineas[idx]
+        if not linea.strip().startswith("|"):
+            break
+        fin_tabla_idx = idx
+        celdas = [c.strip() for c in linea.strip().strip("|").split("|")]
+        if all(_RE_ES_SEPARADOR.match(c) for c in celdas):
+            continue  # fila separadora (|---|---|)
+        filas_crudas.append(celdas)
+
+    if not filas_crudas:
+        return [], None
+
+    encabezado = [c.lower() for c in filas_crudas[0]]
+
+    def _col(nombres_posibles, default):
+        for i, c in enumerate(encabezado):
+            if any(n in c for n in nombres_posibles):
+                return i
+        return default
+
+    idx_doc    = _col(["documento"], 0)
+    idx_cedula = _col(["cédula", "cedula"], min(2, len(encabezado) - 1))
+    idx_clave  = _col(["dato clave", "clave"], None)
+    idx_pert   = len(encabezado) - 1  # la última columna siempre es SI/NO por especificación
+
+    filas = []
+    for celdas in filas_crudas[1:]:
+        if len(celdas) <= idx_pert:
+            continue
+        doc     = celdas[idx_doc] if idx_doc < len(celdas) else ""
+        cedula  = _normalizar_cedula(celdas[idx_cedula]) if idx_cedula < len(celdas) else None
+        clave   = celdas[idx_clave] if (idx_clave is not None and idx_clave < len(celdas)) else ""
+        pertyxt = celdas[idx_pert]
+        if _es_negativo(pertyxt):
+            pert = "NO"
+        elif _es_afirmativo(pertyxt):
+            pert = "SI"
+        else:
+            pert = "?"
+        filas.append({"documento": doc, "cedula": cedula, "dato_clave": clave, "pertenece": pert})
+
+    # offset absoluto en el texto ORIGINAL donde termina la tabla
+    offset_relativo = sum(len(l) + 1 for l in lineas[:fin_tabla_idx + 1])
+    offset_fin_tabla = m_enc.end() + offset_relativo
+
+    return filas, offset_fin_tabla
+
+
+def validar_analisis_escalafon(texto: str, caso: dict, total_pdfs_enviados: int) -> list:
+    """
+    Verifica que el análisis de ESCALAFÓN no use, después de su propia matriz de
+    procedencia, ningún documento que él mismo marcó como NO perteneciente a este
+    docente. Devuelve una lista de errores en texto (vacía si está limpio).
+
+    Es deliberadamente conservador: solo dispara cuando encuentra la cédula exacta
+    de un documento excluido repetida más adelante. No intenta entender lenguaje
+    natural ni juzga la calidad jurídica del análisis, solo la integridad documental.
+    """
+    errores = []
+
+    filas, offset_fin_tabla = extraer_matriz_procedencia(texto)
+
+    if not filas:
+        errores.append(
+            "No se encontro una tabla con formato markdown debajo del encabezado "
+            "'MATRIZ DE PROCEDENCIA' (seccion 2). Es obligatoria: una fila numerada "
+            "por cada PDF recibido, con columnas Documento, Cedula, Dato clave y "
+            "Pertenece a este docente (SI/NO)."
+        )
+        return errores
+
+    if len(filas) != total_pdfs_enviados:
+        errores.append(
+            f"Tu MATRIZ DE PROCEDENCIA tiene {len(filas)} fila(s) pero se te enviaron "
+            f"{total_pdfs_enviados} PDFs. Debe haber exactamente una fila por cada PDF recibido."
+        )
+
+    cedula_propia = _normalizar_cedula(str(caso.get("identificacion") or ""))
+
+    # Chequeo por cédula: cubre el caso en que un número de identificación ajeno
+    # se filtra en secciones que sí lo citarían (identidad, decisión del acto,
+    # prosa). Es un complemento del chequeo por tokens de abajo, no el único: las
+    # matrices de título y formación pedagógica de este módulo no llevan columna
+    # de cédula, así que ahí la defensa real es la de "Dato clave".
+    cedulas_excluidas = {
+        f["cedula"] for f in filas
+        if f["pertenece"] == "NO" and f["cedula"] and f["cedula"] != cedula_propia
+    }
+
+    resto = texto[offset_fin_tabla:] if offset_fin_tabla is not None else ""
+
+    if cedulas_excluidas and resto:
+        cedulas_en_resto = set(_RE_DIGITOS.findall(resto.replace(".", "").replace(" ", "")))
+        filtradas = cedulas_excluidas & cedulas_en_resto
+        for ced in sorted(filtradas):
+            doc_origen = next(
+                (f["documento"] for f in filas if f["cedula"] == ced and f["pertenece"] == "NO"),
+                "documento no identificado"
+            )
+            errores.append(
+                f"CONTAMINACION DETECTADA: marcaste el documento '{doc_origen}' (cedula {ced}) "
+                f"como NO perteneciente a este docente en tu matriz de procedencia, pero esa misma "
+                f"cedula vuelve a aparecer despues en tu analisis. Revisa TODAS las matrices "
+                f"posteriores (titulo academico, formacion pedagogica, soportes) y elimina "
+                f"cualquier fila o dato que provenga de ese documento."
+            )
+
+    # Verificación por "Dato clave": en este sistema las matrices de título y de
+    # formación pedagógica NUNCA llevan columna de cédula (revisar sección 15 del
+    # prompt), así que la cédula sola no basta para detectar la contaminación real
+    # observada en producción (una institución o título ajeno filtrándose en esas
+    # tablas). El ancla es el conjunto de tokens distintivos del "Dato clave" que
+    # el propio modelo escribió en la fila excluida al hacer el inventario.
+    #
+    # Antes de comparar, se restan los tokens que el docente YA tiene de forma
+    # legítima en sus propios documentos (filas SI). Esto evita falsos positivos
+    # cuando dos personas del mismo lote comparten institución (p. ej. ambas
+    # tienen un certificado de la misma universidad): la palabra compartida no
+    # cuenta como evidencia de contaminación si el propio docente también la
+    # tiene de forma legítima.
+    docs_excluidos = [f for f in filas if f["pertenece"] == "NO"]
+    tokens_propios = set()
+    for f in filas:
+        if f["pertenece"] == "SI":
+            tokens_propios |= _tokens_clave(f["dato_clave"])
+
+    if docs_excluidos and resto:
+        for patron, nombre_seccion in [
+            (r'MATRIZ\s+DE\s+T[ÍI]TULO', "MATRIZ DE TÍTULO ACADÉMICO"),
+            (r'MATRIZ\s+DE\s+FORMACI[ÓO]N', "MATRIZ DE FORMACIÓN PEDAGÓGICA"),
+        ]:
+            m_sec = re.search(patron, resto, re.IGNORECASE)
+            if not m_sec:
+                continue
+            bloque = resto[m_sec.end(): m_sec.end() + 2500]
+            m_fin = re.search(r'\n\s*\d{1,2}\.\s+[A-ZÁÉÍÓÚÑ]', bloque)
+            if m_fin:
+                bloque = bloque[:m_fin.start()]
+            candidatos_bloque = _candidatos_difusos(bloque)
+
+            for doc in docs_excluidos:
+                tokens_doc = _tokens_clave(doc["dato_clave"]) - tokens_propios
+                if not tokens_doc:
+                    continue  # todo lo distintivo de este doc coincide con material propio
+                encontrados = sorted(
+                    t for t in tokens_doc if _hay_coincidencia_difusa(t, candidatos_bloque)
+                )
+                if encontrados:
+                    errores.append(
+                        f"CONTAMINACION DETECTADA: el documento '{doc['documento']}' "
+                        f"('{doc['dato_clave']}') fue marcado NO en tu matriz de procedencia "
+                        f"(no pertenece a este docente), pero en tu {nombre_seccion} aparecen los "
+                        f"terminos {encontrados} que corresponden a ese documento y no a "
+                        f"ninguno de los documentos propios de este docente. Elimina esa fila y, si "
+                        f"el docente no tiene soporte propio para esa matriz, usa 'no aportado'."
+                    )
+                    break  # un aviso por seccion evita ruido repetido
+
+    return errores
+
+
 def cargar_prompt(nombre: str) -> str:
     ruta = os.path.join(PROMPTS_DIR, f"{nombre}.txt")
     if not os.path.exists(ruta):
@@ -727,11 +1034,13 @@ def llamada_clasificador(file_ids: list, errores_previos: list = None,
 
 def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general: str,
                        dependencia: str, otros_sujetos: list = None,
-                       modo: str = "completo") -> str:
+                       modo: str = "completo", errores_previos: list = None) -> str:
     """
     Analiza UN caso específico.
     En modo "completo", file_ids_caso son TODOS los PDFs del correo y el analizador
     determina por sí mismo cuáles pertenecen al sujeto mediante la matriz de procedencia.
+    Si se pasan errores_previos (solo ocurre para ESCALAFON, ver validar_analisis_escalafon),
+    se reinyectan al modelo para que corrija su intento anterior.
     """
     nombre_prompt = MAPA_PROMPTS.get(tipo, "general")
     prompt = cargar_prompt(nombre_prompt)
@@ -807,6 +1116,21 @@ def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general:
     )
 
     prompt_final = contexto + prompt
+
+    if errores_previos:
+        prompt_final += (
+            "\n\n===============================================================\n"
+            "CORRECCION OBLIGATORIA DE TU INTENTO ANTERIOR\n"
+            "===============================================================\n"
+            "Tu analisis anterior de este mismo expediente tuvo estos problemas de integridad "
+            "documental, detectados automaticamente comparando tu propia matriz de procedencia "
+            "contra el resto de tu respuesta:\n\n"
+            + "\n".join(f"- {e}" for e in errores_previos)
+            + "\n\nVuelve a hacer el analisis completo desde la matriz de procedencia. Antes de "
+              "escribir cada matriz posterior, verifica que cada dato que uses provenga de un "
+              "documento marcado SI. No repitas el mismo error.\n"
+        )
+
     content = construir_content(file_ids_caso, prompt_final)
 
     response = client.chat.completions.create(
@@ -1043,16 +1367,63 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
                 print(f"  [WARN] Caso sin documentos válidos, saltando: {sujeto}")
                 continue
 
-            # Ejecutar análisis
-            analisis  = llamada_analizador(
-                file_ids_caso, tipo_general, caso, tipo_general, dependencia,
-                otros_sujetos=otros_sujetos, modo=modo
-            )
-            veredicto = extraer_veredicto(analisis)
+            # Ejecutar análisis. Para ESCALAFON se audita en código la integridad
+            # documental de la propia respuesta (ver validar_analisis_escalafon) y se
+            # reintenta si se detecta contaminación entre expedientes. El resto de
+            # módulos sigue exactamente el flujo anterior, sin cambios de comportamiento.
+            errores_integridad = []
+            intentos_permitidos = MAX_INTENTOS_ANALISIS_ESCALAFON if tipo_general == "ESCALAFON" else 1
+
+            for intento_an in range(1, intentos_permitidos + 1):
+                analisis = llamada_analizador(
+                    file_ids_caso, tipo_general, caso, tipo_general, dependencia,
+                    otros_sujetos=otros_sujetos, modo=modo,
+                    errores_previos=errores_integridad
+                )
+
+                if tipo_general != "ESCALAFON":
+                    errores_integridad = []
+                    break
+
+                errores_integridad = validar_analisis_escalafon(
+                    analisis, caso, total_pdfs_enviados=len(file_ids_caso)
+                )
+                if not errores_integridad:
+                    if intento_an > 1:
+                        print(f"  [OK] Analisis corregido en el intento {intento_an}")
+                    break
+
+                print(f"  [WARN] Intento {intento_an}/{intentos_permitidos} de analisis "
+                      f"con posible contaminacion documental:")
+                for e in errores_integridad:
+                    print(f"         - {e}")
+
+            integridad_ok = not errores_integridad
+
+            if integridad_ok:
+                veredicto = extraer_veredicto(analisis)
+            else:
+                # Fail-closed: tras agotar los reintentos, la contaminacion sigue sin
+                # resolverse. Nunca se deja pasar como APROBADO un analisis que el propio
+                # sistema no pudo verificar libre de datos de otro expediente; se fuerza
+                # a revision manual en vez de confiar en el veredicto que el modelo escribio.
+                print(f"  [ERROR] Contaminacion documental persiste tras {intentos_permitidos} "
+                      f"intento(s). Forzando DESAPROBADO para revision manual.")
+                veredicto = "DESAPROBADO"
+                analisis += (
+                    "\n\nADVERTENCIA DEL SISTEMA: este analisis fue marcado automaticamente como "
+                    "DESAPROBADO porque, tras varios intentos, no fue posible verificar que "
+                    "estuviera libre de datos de otro expediente del mismo correo. Requiere "
+                    "revision manual completa del abogado antes de cualquier decision.\n\n"
+                    "Detalle tecnico para el revisor:\n"
+                    + "\n".join(f"- {e}" for e in errores_integridad)
+                )
+
             carpeta   = MAPA_CARPETAS.get((tipo_general, veredicto), "OTRO")
             nombre    = construir_nombre_archivo(caso, tipo_general, message_id)
 
-            print(f"  Veredicto: {veredicto} | Carpeta: {carpeta}")
+            print(f"  Veredicto: {veredicto} | Carpeta: {carpeta}"
+                  + ("" if integridad_ok else " | INTEGRIDAD: FALLO (revision manual forzada)"))
 
             # ── Metadatos para el encabezado del HTML ──
             meta_html = {
@@ -1082,6 +1453,8 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
                 "nombre_archivo":  nombre,
                 "analisis":        renderizar_analisis(analisis, meta_html),
                 "analisis_texto":  analisis,
+                "integridad_documental_ok": integridad_ok,
+                "errores_integridad": errores_integridad,
                 "message_id":      message_id
             })
 
@@ -1119,6 +1492,7 @@ def version():
         "formato_salida":  FORMATO_SALIDA,
         "modo_entrega":    MODO_ENTREGA,
         "limite_pdfs_modo_completo": LIMITE_PDFS_MODO_COMPLETO,
+        "max_intentos_analisis_escalafon": MAX_INTENTOS_ANALISIS_ESCALAFON,
         "status":          "ok"
     })
 

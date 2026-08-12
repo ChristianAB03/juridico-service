@@ -1,5 +1,6 @@
 MÓDULO ESPECIALIZADO: ESCALAFÓN DOCENTE
-Versión 5 — arquitectura de expediente completo: el analizador filtra por procedencia (2026-08-11)
+Versión 6 — matriz de procedencia con numeración y dato clave; verificación cruzada por cédula
+reforzada en código; corregida contradicción interna sobre riesgo por documentos ajenos (2026-08-12)
 
 ===============================================================
 0. ALCANCE
@@ -30,7 +31,18 @@ Para cada PDF recibido, lee el nombre y la cédula que aparecen DENTRO del docum
 el docente identificado en el acto administrativo principal. Construye esta tabla, que será la
 sección 2 de tu salida:
 
-| Documento | Nombre que aparece en el documento | Cédula en el documento | ¿Pertenece a este docente? |
+| # | Documento | Nombre que aparece en el documento | Cédula en el documento | Dato clave | ¿Pertenece a este docente? |
+
+La columna "Dato clave" es una frase corta que resume lo que ese documento certifica, y debes
+llenarla en este mismo paso, antes de razonar jurídicamente sobre nada:
+- Acto administrativo: el verbo decisorio (ej. "INSCRIBIR, Grado 2A").
+- Diploma o acta de grado: el título profesional exacto que certifica (ej. "Biólogo").
+- Certificado de formación pedagógica o diplomado: institución + concepto (ej. "Areandina —
+  formación pedagógica no licenciados, 480h").
+- Otro soporte: una frase de máximo 8 palabras.
+
+Numera las filas desde 1. Debe haber una fila por cada PDF recibido: si llegaron diez PDFs, la tabla
+tiene diez filas numeradas del 1 al 10.
 
 Cómo localizar el titular en cada tipo de documento:
 - Acto administrativo: "el(la) educador(a) NOMBRE, identificado(a) con la C.C. N° NÚMERO".
@@ -86,6 +98,11 @@ Antes de cerrar el análisis, verifica que el título profesional, la instituci�
 los certificados de formación que reportaste provengan TODOS de documentos marcados con "SÍ" en la
 matriz de procedencia. Si detectas que reportaste un título o una institución tomada de un documento
 marcado con "NO", corrige el análisis completo antes de responder.
+
+Este control se refuerza de forma automática fuera de este documento: si la cédula de un documento
+marcado NO vuelve a aparecer en cualquier parte del análisis después de la matriz de procedencia, el
+sistema te devolverá el análisis señalando exactamente qué cédula se filtró, para que lo corrijas
+antes de que se acepte la respuesta.
 
 PASO 1.3 — IDENTIFICACIÓN DEL ACTO ADMINISTRATIVO PRINCIPAL
 
@@ -408,12 +425,23 @@ Redacta en prosa breve: docente, cédula, trámite detectado, grado y nivel, y e
 
 2. MATRIZ DE PROCEDENCIA DOCUMENTAL
 
-| Documento | Nombre en el documento | Cédula en el documento | Pertenece a este docente |
-|---|---|---|---|
+| # | Documento | Nombre en el documento | Cédula en el documento | Dato clave | Pertenece a este docente |
+|---|---|---|---|---|---|
 
-Una fila por cada PDF recibido, sin excepción. En la última columna escribe SI o NO.
-Si alguna fila dice NO, ese documento queda EXCLUIDO del análisis y debe aparecer como riesgo ALTO en
-la sección 12.
+Una fila numerada por cada PDF recibido, sin excepción: si recibiste diez PDFs, la tabla tiene diez
+filas numeradas del 1 al 10. En la última columna escribe SI o NO.
+
+Recibir documentos de otras personas es NORMAL cuando el correo trae varios expedientes: NO lo
+reportes como riesgo (regla completa en el Paso 1.2). Los documentos marcados NO simplemente quedan
+fuera del resto del análisis.
+
+Inmediatamente después de la tabla, en una sola línea, escribe:
+
+DOCUMENTOS HABILITADOS: lista de los "Dato clave" de los documentos marcados SI, separados por punto y coma.
+
+Esa línea es la única fuente de material permitido para el resto del análisis. Ninguna matriz
+posterior (título académico, formación pedagógica, soportes del expediente) puede citar un título,
+una institución o un certificado que no aparezca en esa línea.
 
 3. MATRIZ DE IDENTIDAD
 
@@ -538,28 +566,31 @@ Antes de entregar el análisis, revisa:
 1. ¿Identifiqué correctamente cuál PDF es el ACTO ADMINISTRATIVO? Un acta de grado o un diploma
    universitario NO es el acto administrativo. El acto lleva RESOLUCIÓN NÚMERO, CONSIDERANDO y
    RESUELVE, y lo expide la Secretaría Distrital de Educación de Barranquilla.
-2. ¿Construí la MATRIZ DE PROCEDENCIA con una fila por cada PDF recibido, ni una más ni una menos?
-3. ¿Algún documento marcado con NO aparece como fila en otra matriz? Si es así, elimínalo de ahí:
+2. ¿Construí la MATRIZ DE PROCEDENCIA con fila numerada para cada PDF recibido, ni una más ni una
+   menos, y con la columna "Dato clave" llena en cada fila?
+3. ¿Escribí la línea DOCUMENTOS HABILITADOS inmediatamente después de la tabla, con los "Dato clave"
+   de los documentos marcados SI?
+4. ¿Algún documento marcado con NO aparece como fila en otra matriz? Si es así, elimínalo de ahí:
    solo puede figurar en la matriz de procedencia.
-4. ¿Alguna matriz tiene una fila de un documento que NO está en la matriz de procedencia? Si es así,
+5. ¿Alguna matriz tiene una fila de un documento que NO está en la matriz de procedencia? Si es así,
    elimínala: no puedes analizar documentos que no inventariaste.
-5. ¿Hay filas duplicadas del mismo documento en alguna matriz?
-6. ¿Reporté como riesgo el hecho de haber recibido documentos de otra persona? Si es así, elimínalo:
+6. ¿Hay filas duplicadas del mismo documento en alguna matriz?
+7. ¿Reporté como riesgo el hecho de haber recibido documentos de otra persona? Si es así, elimínalo:
    eso es normal cuando el correo trae varios expedientes.
-7. Si la formación pedagógica proviene de una IES con aprobación de Comité, ¿la dejé como "coincide"
+8. Si la formación pedagógica proviene de una IES con aprobación de Comité, ¿la dejé como "coincide"
    sin degradarla a validación manual?
-8. ¿El título profesional, la institución y la fecha de grado que reporté vienen todos del MISMO
+9. ¿El título profesional, la institución y la fecha de grado que reporté vienen todos del MISMO
    documento, y ese documento está marcado con SI?
-9. ¿Verifiqué la fecha de efectos fiscales en el parágrafo del artículo 1 de ESTE acto, dígito a
-   dígito?
-10. Si el acto administrativo fue aportado, ¿extraje su verbo decisorio, grado, nivel, efectos
-   fiscales, notificación y recursos? Si alguno quedó como no identificado, vuelve a leer el acto:
-   probablemente estabas leyendo el documento equivocado.
-11. ¿Marqué como "aportado" algún soporte que en realidad solo está mencionado en el acto? Si es así,
-   corrígelo a "faltante".
-12. ¿Reporté como faltante algún documento que sí estaba entre los PDFs recibidos?
-13. ¿Marqué como hallazgo la ausencia de número o fecha en un proyecto sin firmar? Si es así,
+10. ¿Verifiqué la fecha de efectos fiscales en el parágrafo del artículo 1 de ESTE acto, dígito a
+    dígito?
+11. Si el acto administrativo fue aportado, ¿extraje su verbo decisorio, grado, nivel, efectos
+    fiscales, notificación y recursos? Si alguno quedó como no identificado, vuelve a leer el acto:
+    probablemente estabas leyendo el documento equivocado.
+12. ¿Marqué como "aportado" algún soporte que en realidad solo está mencionado en el acto? Si es así,
+    corrígelo a "faltante".
+13. ¿Reporté como faltante algún documento que sí estaba entre los PDFs recibidos?
+14. ¿Marqué como hallazgo la ausencia de número o fecha en un proyecto sin firmar? Si es así,
     elimínalo: es normal y no es observación.
-14. ¿Clasifiqué la naturaleza de la institución que expide la formación pedagógica?
-15. ¿Todas las matrices están escritas como tablas con el carácter |?
-16. ¿La línea del veredicto está sola al final, sin viñeta ni asteriscos?
+15. ¿Clasifiqué la naturaleza de la institución que expide la formación pedagógica?
+16. ¿Todas las matrices están escritas como tablas con el carácter |?
+17. ¿La línea del veredicto está sola al final, sin viñeta ni asteriscos?
