@@ -26,9 +26,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "5.0"
+BUILD_VERSION = "5.1"
 BUILD_DATE    = "2026-08-12"
-BUILD_FIX     = ("Arquitectura de procedencia previa (modo filtrado): una llamada dedicada inventaria cada PDF extrayendo titular y cedula, y Python asigna los documentos a cada expediente por coincidencia exacta de cedula. Cada analizador recibe SOLO sus documentos, de modo que la contaminacion entre expedientes es imposible por construccion. Los documentos ilegibles o sin correspondencia quedan apartados y se reportan. Alcance: ESCALAFON con 2+ casos; IVC y CESANTIAS quedan en modo completo porque admiten soportes a nombre de terceros.")
+BUILD_FIX     = ("Procedencia por documento individual: cada PDF se inventaria en su propia llamada (en paralelo), de modo que el modelo nunca tiene que llevar la cuenta de que archivo es cual. Python asigna por coincidencia exacta de cedula. Corrige el fallo de la v5.0, donde el inventario en bloque confundia indices y repartia mal los documentos. Alcance: ESCALAFON con 2+ casos; IVC y CESANTIAS siguen en modo completo.")
 
 # Intentos máximos de clasificación antes de aplicar corrección defensiva
 MAX_INTENTOS_CLASIFICACION = 3
@@ -47,8 +47,6 @@ MAX_INTENTOS_ANALISIS_ESCALAFON = int(os.environ.get("MAX_INTENTOS_ANALISIS_ESCA
 #   "subconjunto" → cada caso recibe solo los PDFs que el clasificador le asignó (modo original).
 MODO_ENTREGA = os.environ.get("MODO_ENTREGA", "filtrado").strip().lower()
 
-# Intentos máximos de la llamada de inventario de procedencia (modo "filtrado").
-MAX_INTENTOS_PROCEDENCIA = int(os.environ.get("MAX_INTENTOS_PROCEDENCIA", "2"))
 
 # Si el correo trae más PDFs que este límite, se vuelve al modo subconjunto
 # para no disparar el costo por token ni el tiempo de respuesta.
@@ -977,87 +975,97 @@ def validar_analisis_escalafon(texto: str, caso: dict, total_pdfs_enviados: int)
 # nadie. Queda apartado y se reporta para revisión humana. Es
 # preferible un documento sin asignar a uno asignado por suposición.
 
-def validar_inventario_procedencia(inventario: dict, total_pdfs: int) -> list:
-    """Audita el JSON de la llamada de procedencia. Devuelve lista de errores."""
-    errores = []
-    docs = inventario.get("documentos", []) or []
-
-    if not docs:
-        errores.append("No devolviste ningun documento en el array 'documentos'.")
-        return errores
-
-    indices = [d.get("indice") for d in docs]
-    validos = set(range(total_pdfs))
-
-    fuera = [i for i in indices if not isinstance(i, int) or i not in validos]
-    if fuera:
-        errores.append(
-            f"Usaste los indices {fuera}, que NO EXISTEN. Se recibieron {total_pdfs} PDFs, "
-            f"por lo que los unicos indices validos son de 0 a {total_pdfs - 1}."
-        )
-
-    repetidos = sorted({i for i in indices if isinstance(i, int) and indices.count(i) > 1})
-    if repetidos:
-        errores.append(f"Los indices {repetidos} aparecen mas de una vez. Cada PDF va una sola vez.")
-
-    faltantes = sorted(validos - {i for i in indices if isinstance(i, int)})
-    if faltantes:
-        errores.append(
-            f"Faltan los indices {faltantes}. Debe haber exactamente una entrada por cada "
-            f"PDF recibido, incluidos los que no pudiste leer (esos van con legible=false)."
-        )
-
-    # Una cédula declarada debe ser un número plausible
-    for d in docs:
-        ced = d.get("cedula")
-        if ced is None:
-            continue
-        limpia = re.sub(r'\D', '', str(ced))
-        if len(limpia) < 5:
-            errores.append(
-                f"El indice {d.get('indice')} trae la cedula '{ced}', que no parece un numero de "
-                f"cedula valido. Si no pudiste leerla, escribe cedula: null y legible: false."
-            )
-
-    return errores
-
-
-def llamada_procedencia(file_ids: list, errores_previos: list = None) -> dict:
-    """Llama al modelo para inventariar los PDFs. Solo extrae, no decide."""
+def _procedencia_de_un_pdf(file_id: str, indice: int) -> dict:
+    """
+    Inventaria UN solo PDF. Al enviar un único documento por llamada, el modelo no
+    tiene que llevar la cuenta de qué archivo es cuál: el índice lo pone Python.
+    Esto elimina el problema de seguimiento de índices, que era la causa de que el
+    inventario en bloque asignara cédulas al documento equivocado.
+    """
     prompt = cargar_prompt("procedencia")
-
-    if errores_previos:
-        prompt += (
-            "\n\n===============================================================\n"
-            "CORRECCION OBLIGATORIA DE TU INTENTO ANTERIOR\n"
-            "===============================================================\n"
-            f"Recibiste exactamente {len(file_ids)} PDFs. Los indices validos son 0 a "
-            f"{len(file_ids) - 1}.\n\nTu inventario anterior tuvo estos errores:\n\n"
-            + "\n".join(f"- {e}" for e in errores_previos)
-            + "\n\nVuelve a recorrer los PDFs uno por uno y corrige.\n"
-        )
-
-    content = construir_content(file_ids, prompt)
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": content}],
-    )
-    texto = response.choices[0].message.content.strip()
-
-    if "```" in texto:
-        for p in texto.split("```"):
-            p = p.strip()
-            if p.startswith("json"):
-                p = p[4:].strip()
-            try:
-                return json.loads(p)
-            except Exception:
-                continue
+    base = {
+        "indice": indice,
+        "documento": "documento no identificado",
+        "titular": None,
+        "cedula": None,
+        "dato_clave": "no identificado",
+        "legible": False,
+    }
     try:
-        return json.loads(texto)
-    except Exception:
-        print(f"[WARN] No se pudo parsear el inventario de procedencia: {texto[:400]}")
-        return {"documentos": []}
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": construir_content([file_id], prompt)}],
+        )
+        texto = response.choices[0].message.content.strip()
+
+        datos = None
+        if "```" in texto:
+            for p in texto.split("```"):
+                p = p.strip()
+                if p.startswith("json"):
+                    p = p[4:].strip()
+                try:
+                    datos = json.loads(p)
+                    break
+                except Exception:
+                    continue
+        if datos is None:
+            datos = json.loads(texto)
+
+        cedula = datos.get("cedula")
+        cedula = re.sub(r"\D", "", str(cedula)) if cedula is not None else None
+        if cedula is not None and len(cedula) < 5:
+            cedula = None
+
+        base.update({
+            "documento":  datos.get("documento") or base["documento"],
+            "titular":    datos.get("titular"),
+            "cedula":     cedula,
+            "dato_clave": datos.get("dato_clave") or base["dato_clave"],
+            "legible":    bool(datos.get("legible")) and bool(cedula),
+        })
+    except Exception as e:
+        # Cualquier fallo deja el documento como ilegible: se apartará, nunca se
+        # asignará por suposición.
+        print(f"  [WARN] No se pudo inventariar el PDF #{indice}: {e}")
+
+    return base
+
+
+def llamada_procedencia(file_ids: list) -> dict:
+    """
+    Inventaria todos los PDFs, uno por llamada y en paralelo.
+    Devuelve {"documentos": [...]} con una entrada por índice, en orden.
+    """
+    resultados = [None] * len(file_ids)
+    hilos = []
+    lock = threading.Lock()
+
+    def trabajo(idx, fid):
+        r = _procedencia_de_un_pdf(fid, idx)
+        with lock:
+            resultados[idx] = r
+
+    for idx, fid in enumerate(file_ids):
+        t = threading.Thread(target=trabajo, args=(idx, fid), daemon=True)
+        t.start()
+        hilos.append(t)
+
+    for t in hilos:
+        t.join(timeout=180)
+
+    for idx in range(len(file_ids)):
+        if resultados[idx] is None:
+            resultados[idx] = {
+                "indice": idx,
+                "documento": "documento no inventariado",
+                "titular": None,
+                "cedula": None,
+                "dato_clave": "no identificado",
+                "legible": False,
+            }
+
+    return {"total_pdfs": len(file_ids), "documentos": resultados}
 
 
 def asignar_documentos_por_cedula(inventario: dict, casos: list, total_pdfs: int) -> tuple:
@@ -1131,9 +1139,21 @@ def asignar_documentos_por_cedula(inventario: dict, casos: list, total_pdfs: int
     return asignacion, no_asignados
 
 
+# Prompts que NO deben caer al fallback general.txt: si faltan, el sistema no
+# puede cumplir su función y es mejor saberlo de inmediato que degradarse en
+# silencio (procedencia.txt es un extractor de datos; general.txt es un
+# analizador jurídico, y sustituirlo produciría basura).
+PROMPTS_SIN_FALLBACK = {"procedencia", "clasificador"}
+
+
 def cargar_prompt(nombre: str) -> str:
     ruta = os.path.join(PROMPTS_DIR, f"{nombre}.txt")
     if not os.path.exists(ruta):
+        if nombre in PROMPTS_SIN_FALLBACK:
+            raise FileNotFoundError(
+                f"Falta el prompt obligatorio '{nombre}.txt' en {PROMPTS_DIR}. "
+                f"Sin el, el sistema no puede operar correctamente."
+            )
         ruta = os.path.join(PROMPTS_DIR, "general.txt")
     with open(ruta, "r", encoding="utf-8") as f:
         return f.read()
@@ -1609,19 +1629,13 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
         asignacion_filtrada = {}
         docs_no_asignados = []
         if modo == "filtrado":
-            print("Inventariando procedencia de los documentos...")
-            errores_proc = []
-            inventario = {}
-            for intento_p in range(1, MAX_INTENTOS_PROCEDENCIA + 1):
-                inventario = llamada_procedencia(file_ids, errores_previos=errores_proc)
-                errores_proc = validar_inventario_procedencia(inventario, total_pdfs)
-                if not errores_proc:
-                    if intento_p > 1:
-                        print(f"  [OK] Inventario corregido en el intento {intento_p}")
-                    break
-                print(f"  [WARN] Intento {intento_p}/{MAX_INTENTOS_PROCEDENCIA} de inventario con errores:")
-                for e in errores_proc:
-                    print(f"         - {e}")
+            print(f"Inventariando procedencia de {total_pdfs} documentos "
+                  f"(una llamada por PDF, en paralelo)...")
+            inventario = llamada_procedencia(file_ids)
+            for d in inventario.get("documentos", []):
+                estado = d.get("cedula") if d.get("legible") else "ILEGIBLE"
+                print(f"  PDF #{d['indice']}: {d.get('documento')} | "
+                      f"{d.get('titular') or 'sin titular'} | {estado}")
 
             asignacion_filtrada, docs_no_asignados = asignar_documentos_por_cedula(
                 inventario, casos, total_pdfs
@@ -1867,7 +1881,6 @@ def version():
         "model":           MODEL,
         "formato_salida":  FORMATO_SALIDA,
         "modo_entrega":    MODO_ENTREGA,
-        "max_intentos_procedencia": MAX_INTENTOS_PROCEDENCIA,
         "limite_pdfs_modo_completo": LIMITE_PDFS_MODO_COMPLETO,
         "max_intentos_analisis_escalafon": MAX_INTENTOS_ANALISIS_ESCALAFON,
         "status":          "ok"

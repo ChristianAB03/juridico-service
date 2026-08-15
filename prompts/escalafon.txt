@@ -37,8 +37,8 @@ La columna "Dato clave" es una frase corta que resume lo que ese documento certi
 llenarla en este mismo paso, antes de razonar jurídicamente sobre nada:
 - Acto administrativo: el verbo decisorio (ej. "INSCRIBIR, Grado 2A").
 - Diploma o acta de grado: el título profesional exacto que certifica (ej. "Biólogo").
-- Certificado de formación pedagógica o diplomado: institución + concepto (ej. "Areandina —
-  formación pedagógica no licenciados, 480h").
+- Certificado de formación pedagógica o diplomado: institución + programa + intensidad, tal como
+  aparezcan en ese documento.
 - Otro soporte: una frase de máximo 8 palabras.
 
 Numera las filas desde 1. Debe haber una fila por cada PDF recibido: si llegaron diez PDFs, la tabla

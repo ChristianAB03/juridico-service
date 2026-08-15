@@ -135,8 +135,8 @@ FORMATO DE RESPUESTA (solo JSON, sin markdown, sin explicaciones)
   "cantidad_casos": 1,
   "casos": [
     {
-      "sujeto": "FELIPE CARRILLO RODRIGUEZ",
-      "identificacion": "1051816210",
+      "sujeto": "NOMBRE APELLIDO APELLIDO",
+      "identificacion": "1234567890",
       "asunto": "Cesantía parcial para remodelación de vivienda",
       "radicado": null,
       "vencimiento": null,
@@ -145,12 +145,12 @@ FORMATO DE RESPUESTA (solo JSON, sin markdown, sin explicaciones)
       "subtipo": null,
       "indices_documentos": [0, 1, 2, 3, 4, 5],
       "documentos": [
-        {"nombre": "Acto administrativo de cesantía - Felipe Carrillo", "rol": "acto_principal", "indice": 0, "titular": "FELIPE CARRILLO RODRIGUEZ", "cedula_titular": "1051816210"},
-        {"nombre": "Cédula del docente Felipe Carrillo", "rol": "cedula_docente", "indice": 1, "titular": "FELIPE CARRILLO RODRIGUEZ", "cedula_titular": "1051816210"},
-        {"nombre": "Contrato de obra", "rol": "contrato_obra", "indice": 2, "titular": "FELIPE CARRILLO RODRIGUEZ", "cedula_titular": "1051816210"},
-        {"nombre": "Matrícula inmobiliaria", "rol": "matricula_inmobiliaria", "indice": 3, "titular": "FELIPE CARRILLO RODRIGUEZ", "cedula_titular": "1051816210"},
-        {"nombre": "Certificación bancaria", "rol": "certificacion_bancaria", "indice": 4, "titular": "FELIPE CARRILLO RODRIGUEZ", "cedula_titular": "1051816210"},
-        {"nombre": "Cédula y tarjeta profesional del contratista", "rol": "cedula_contratista", "indice": 5, "titular": "JUAN CARLOS BORRERO", "cedula_titular": "8731008"}
+        {"nombre": "Acto administrativo de cesantía - el docente", "rol": "acto_principal", "indice": 0, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
+        {"nombre": "Cédula del docente el docente", "rol": "cedula_docente", "indice": 1, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
+        {"nombre": "Contrato de obra", "rol": "contrato_obra", "indice": 2, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
+        {"nombre": "Matrícula inmobiliaria", "rol": "matricula_inmobiliaria", "indice": 3, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
+        {"nombre": "Certificación bancaria", "rol": "certificacion_bancaria", "indice": 4, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
+        {"nombre": "Cédula y tarjeta profesional del contratista", "rol": "cedula_contratista", "indice": 5, "titular": "NOMBRE CONTRATISTA", "cedula_titular": "9876543210"}
       ]
     }
   ],
