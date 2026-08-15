@@ -26,9 +26,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "4.3"
+BUILD_VERSION = "5.0"
 BUILD_DATE    = "2026-08-12"
-BUILD_FIX     = ("Corregido falso positivo del detector de contaminacion: los tokens que son variantes morfologicas de palabras genericas del dominio ('pedagogia' vs 'pedagogica') ya no sirven como ancla, porque coincidian con nombres de institucion legitimos. Severidades separadas: contaminacion bloquea, defectos de inventario solo avisan. Alcance: solo ESCALAFON.")
+BUILD_FIX     = ("Arquitectura de procedencia previa (modo filtrado): una llamada dedicada inventaria cada PDF extrayendo titular y cedula, y Python asigna los documentos a cada expediente por coincidencia exacta de cedula. Cada analizador recibe SOLO sus documentos, de modo que la contaminacion entre expedientes es imposible por construccion. Los documentos ilegibles o sin correspondencia quedan apartados y se reportan. Alcance: ESCALAFON con 2+ casos; IVC y CESANTIAS quedan en modo completo porque admiten soportes a nombre de terceros.")
 
 # Intentos máximos de clasificación antes de aplicar corrección defensiva
 MAX_INTENTOS_CLASIFICACION = 3
@@ -40,9 +40,15 @@ MAX_INTENTOS_CLASIFICACION = 3
 MAX_INTENTOS_ANALISIS_ESCALAFON = int(os.environ.get("MAX_INTENTOS_ANALISIS_ESCALAFON", "2"))
 
 # Modo de entrega de PDFs al analizador:
-#   "completo" → cada caso recibe TODOS los PDFs del correo y filtra por procedencia.
-#   "subconjunto" → cada caso recibe solo los PDFs que el clasificador le asignó (modo anterior).
-MODO_ENTREGA = os.environ.get("MODO_ENTREGA", "completo").strip().lower()
+#   "filtrado"  → (Opción E, por defecto) una llamada previa inventaria los PDFs y
+#                 Python los asigna por coincidencia exacta de cédula; cada caso recibe
+#                 SOLO sus documentos. La contaminación es imposible por construcción.
+#   "completo"  → cada caso recibe TODOS los PDFs y filtra por procedencia dentro del análisis.
+#   "subconjunto" → cada caso recibe solo los PDFs que el clasificador le asignó (modo original).
+MODO_ENTREGA = os.environ.get("MODO_ENTREGA", "filtrado").strip().lower()
+
+# Intentos máximos de la llamada de inventario de procedencia (modo "filtrado").
+MAX_INTENTOS_PROCEDENCIA = int(os.environ.get("MAX_INTENTOS_PROCEDENCIA", "2"))
 
 # Si el correo trae más PDFs que este límite, se vuelve al modo subconjunto
 # para no disparar el costo por token ni el tiempo de respuesta.
@@ -537,7 +543,9 @@ def validar_clasificacion(clasificacion: dict, total_pdfs: int, modo: str = "com
                 f"'casos' tiene {len(casos)} elementos."
             )
 
-    if modo == "completo":
+    # En "completo" y "filtrado" el clasificador no reparte documentos:
+    # solo identifica los casos, así que no hay índices que auditar.
+    if modo in ("completo", "filtrado"):
         return errores
 
     # ── Validaciones exclusivas del modo subconjunto ─────────────
@@ -950,6 +958,179 @@ def validar_analisis_escalafon(texto: str, caso: dict, total_pdfs_enviados: int)
     return bloqueantes, advertencias
 
 
+# ══════════════════════════════════════════════════════════════
+# PROCEDENCIA PREVIA — asignación determinista de PDFs por cédula
+# ══════════════════════════════════════════════════════════════
+#
+# Arquitectura "filtrado" (Opción E): antes de analizar, una llamada
+# dedicada LEE cada PDF y extrae únicamente nombre y cédula de su
+# titular. La ASIGNACIÓN de cada documento a un expediente la hace
+# Python, comparando esa cédula con la del caso: coincidencia exacta
+# de dígitos, sin juicio del modelo.
+#
+# Con esto el analizador recibe solo los PDFs de su docente, así que
+# la contaminación entre expedientes deja de ser posible por
+# construcción, no por verificación posterior.
+#
+# Criterio estricto (decisión de diseño): un documento cuya cédula no
+# se pudo leer, o que no coincide con ningún caso, NO se entrega a
+# nadie. Queda apartado y se reporta para revisión humana. Es
+# preferible un documento sin asignar a uno asignado por suposición.
+
+def validar_inventario_procedencia(inventario: dict, total_pdfs: int) -> list:
+    """Audita el JSON de la llamada de procedencia. Devuelve lista de errores."""
+    errores = []
+    docs = inventario.get("documentos", []) or []
+
+    if not docs:
+        errores.append("No devolviste ningun documento en el array 'documentos'.")
+        return errores
+
+    indices = [d.get("indice") for d in docs]
+    validos = set(range(total_pdfs))
+
+    fuera = [i for i in indices if not isinstance(i, int) or i not in validos]
+    if fuera:
+        errores.append(
+            f"Usaste los indices {fuera}, que NO EXISTEN. Se recibieron {total_pdfs} PDFs, "
+            f"por lo que los unicos indices validos son de 0 a {total_pdfs - 1}."
+        )
+
+    repetidos = sorted({i for i in indices if isinstance(i, int) and indices.count(i) > 1})
+    if repetidos:
+        errores.append(f"Los indices {repetidos} aparecen mas de una vez. Cada PDF va una sola vez.")
+
+    faltantes = sorted(validos - {i for i in indices if isinstance(i, int)})
+    if faltantes:
+        errores.append(
+            f"Faltan los indices {faltantes}. Debe haber exactamente una entrada por cada "
+            f"PDF recibido, incluidos los que no pudiste leer (esos van con legible=false)."
+        )
+
+    # Una cédula declarada debe ser un número plausible
+    for d in docs:
+        ced = d.get("cedula")
+        if ced is None:
+            continue
+        limpia = re.sub(r'\D', '', str(ced))
+        if len(limpia) < 5:
+            errores.append(
+                f"El indice {d.get('indice')} trae la cedula '{ced}', que no parece un numero de "
+                f"cedula valido. Si no pudiste leerla, escribe cedula: null y legible: false."
+            )
+
+    return errores
+
+
+def llamada_procedencia(file_ids: list, errores_previos: list = None) -> dict:
+    """Llama al modelo para inventariar los PDFs. Solo extrae, no decide."""
+    prompt = cargar_prompt("procedencia")
+
+    if errores_previos:
+        prompt += (
+            "\n\n===============================================================\n"
+            "CORRECCION OBLIGATORIA DE TU INTENTO ANTERIOR\n"
+            "===============================================================\n"
+            f"Recibiste exactamente {len(file_ids)} PDFs. Los indices validos son 0 a "
+            f"{len(file_ids) - 1}.\n\nTu inventario anterior tuvo estos errores:\n\n"
+            + "\n".join(f"- {e}" for e in errores_previos)
+            + "\n\nVuelve a recorrer los PDFs uno por uno y corrige.\n"
+        )
+
+    content = construir_content(file_ids, prompt)
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": content}],
+    )
+    texto = response.choices[0].message.content.strip()
+
+    if "```" in texto:
+        for p in texto.split("```"):
+            p = p.strip()
+            if p.startswith("json"):
+                p = p[4:].strip()
+            try:
+                return json.loads(p)
+            except Exception:
+                continue
+    try:
+        return json.loads(texto)
+    except Exception:
+        print(f"[WARN] No se pudo parsear el inventario de procedencia: {texto[:400]}")
+        return {"documentos": []}
+
+
+def asignar_documentos_por_cedula(inventario: dict, casos: list, total_pdfs: int) -> tuple:
+    """
+    Asigna cada PDF a un caso comparando la cédula leída con la del caso.
+    La comparación es exacta sobre dígitos: no hay heurística ni juicio.
+
+    Devuelve (asignacion, no_asignados):
+      asignacion    -> {clave_caso: [indices]}  con clave_caso = (sujeto, identificacion)
+      no_asignados  -> [ {indice, documento, titular, cedula, razon} ]
+    """
+    docs = inventario.get("documentos", []) or []
+
+    # Índice de cédula -> caso
+    cedula_a_caso = {}
+    for c in casos:
+        ced = _normalizar_cedula(str(c.get("identificacion") or ""))
+        if ced:
+            cedula_a_caso[ced] = (c.get("sujeto"), c.get("identificacion"))
+
+    asignacion = {(c.get("sujeto"), c.get("identificacion")): [] for c in casos}
+    no_asignados = []
+    vistos = set()
+
+    for d in docs:
+        idx = d.get("indice")
+        if not isinstance(idx, int) or not (0 <= idx < total_pdfs) or idx in vistos:
+            continue
+        vistos.add(idx)
+
+        legible = d.get("legible", True)
+        ced = _normalizar_cedula(str(d.get("cedula") or ""))
+
+        if not legible or not ced:
+            no_asignados.append({
+                "indice": idx,
+                "documento": d.get("documento") or "documento sin identificar",
+                "titular": d.get("titular"),
+                "cedula": d.get("cedula"),
+                "razon": "No se pudo leer con certeza el titular o la cedula del documento."
+            })
+            continue
+
+        clave = cedula_a_caso.get(ced)
+        if clave is None:
+            no_asignados.append({
+                "indice": idx,
+                "documento": d.get("documento") or "documento sin identificar",
+                "titular": d.get("titular"),
+                "cedula": d.get("cedula"),
+                "razon": (f"La cedula {ced} no corresponde a ninguno de los expedientes "
+                          f"identificados en este correo.")
+            })
+            continue
+
+        asignacion[clave].append(idx)
+
+    # PDFs que el modelo no inventarió en absoluto
+    for idx in sorted(set(range(total_pdfs)) - vistos):
+        no_asignados.append({
+            "indice": idx,
+            "documento": "documento no inventariado",
+            "titular": None,
+            "cedula": None,
+            "razon": "El inventario de procedencia no incluyo este PDF."
+        })
+
+    for k in asignacion:
+        asignacion[k] = sorted(asignacion[k])
+
+    return asignacion, no_asignados
+
+
 def cargar_prompt(nombre: str) -> str:
     ruta = os.path.join(PROMPTS_DIR, f"{nombre}.txt")
     if not os.path.exists(ruta):
@@ -1000,10 +1181,10 @@ def llamada_clasificador(file_ids: list, errores_previos: list = None,
     """
     prompt = cargar_prompt("clasificador")
 
-    if modo == "completo":
+    if modo in ("completo", "filtrado"):
         prompt = prompt + (
             "\n\n===============================================================\n"
-            "MODO EXPEDIENTE COMPLETO - INSTRUCCION QUE TIENE PRIORIDAD\n"
+            "INSTRUCCION QUE TIENE PRIORIDAD SOBRE EL REPARTO DE DOCUMENTOS\n"
             "===============================================================\n"
             "En esta ejecucion NO debes repartir los documentos entre los casos.\n"
             "Cada analizador recibira todos los PDFs y decidira por si mismo cuales le\n"
@@ -1102,7 +1283,22 @@ def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general:
     sujeto_caso = caso.get('sujeto') or 'este docente/ciudadano'
     ident_caso  = caso.get('identificacion') or 'sin identificacion'
 
-    if modo == "completo":
+    if modo == "filtrado":
+        bloque_procedencia = (
+            f"[EXPEDIENTE YA FILTRADO - LEE ESTO PRIMERO]\n"
+            f"El titular de este expediente es: {sujeto_caso}, cedula {ident_caso}.\n"
+            f"Los PDFs que recibes fueron seleccionados automaticamente comparando la cedula "
+            f"leida en cada documento contra la cedula de este docente. En principio TODOS "
+            f"pertenecen a {sujeto_caso}.\n"
+            f"Aun asi, completa la matriz de procedencia como control: lee el nombre y la cedula "
+            f"dentro de cada PDF y confirma que corresponden. Lo normal es que todas las filas "
+            f"digan SI.\n"
+            f"Si encontraras un documento a nombre de otra persona, marcalo NO, no lo uses, y "
+            f"reportalo en riesgos con nivel ALTO: seria una falla del filtro previo.\n"
+            f"Si falta algun soporte, repórtalo como faltante con normalidad: los documentos que "
+            f"no se pudieron asignar con certeza quedaron apartados a proposito.\n\n"
+        )
+    elif modo == "completo":
         if otros_sujetos:
             lista_otros = "\n".join(f"  - {s}" for s in otros_sujetos)
             bloque_otros = (
@@ -1312,11 +1508,11 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
         # Determinar el modo de entrega de PDFs al analizador
         total_pdfs = len(file_ids)
         modo = MODO_ENTREGA
-        if modo == "completo" and total_pdfs > LIMITE_PDFS_MODO_COMPLETO:
+        if modo in ("completo", "filtrado") and total_pdfs > LIMITE_PDFS_MODO_COMPLETO:
             modo = "subconjunto"
             print(f"  [INFO] {total_pdfs} PDFs superan el limite de {LIMITE_PDFS_MODO_COMPLETO}; "
                   f"se usa modo subconjunto para controlar costo y tiempo.")
-        print(f"Modo de entrega: {modo}")
+        print(f"Modo de entrega solicitado: {modo}")
 
         # LLAMADA 1: Clasificar y detectar casos (con reintento automático)
         print("Clasificando documentos...")
@@ -1382,6 +1578,71 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
 
         print(f"Tipo general: {tipo_general} | Casos detectados: {len(casos)} | Huérfanos: {len(huerfanos)}")
 
+        # ── ALCANCE DEL MODO FILTRADO ────────────────────────────
+        # El filtrado asigna documentos comparando la CEDULA leida en cada PDF
+        # con la del expediente. Eso solo es correcto cuando todos los soportes
+        # estan a nombre del propio titular, que es el caso de ESCALAFON.
+        #
+        # Se excluye deliberadamente:
+        #  - Tipos donde un soporte legitimo lleva la identificacion de un
+        #    TERCERO: IVC (el sujeto es una institucion con NIT, pero los
+        #    soportes traen cedulas de representantes legales) y CESANTIAS de
+        #    remodelacion (la cedula del contratista pertenece al caso del
+        #    docente). Filtrar por cedula ahi apartaria soportes validos.
+        #  - Correos con un solo caso: sin un segundo expediente en el lote no
+        #    existe riesgo de contaminacion, asi que la llamada extra no aporta
+        #    nada y se ahorra.
+        TIPOS_CON_SOPORTES_DE_TERCEROS = {"IVC", "CESANTIAS"}
+        if modo == "filtrado":
+            if tipo_general in TIPOS_CON_SOPORTES_DE_TERCEROS:
+                modo = "completo"
+                print(f"  [INFO] {tipo_general} admite soportes a nombre de terceros; "
+                      f"se usa modo completo para no apartarlos.")
+            elif len(casos) < 2:
+                modo = "completo"
+                print(f"  [INFO] Un solo expediente en el correo: sin riesgo de "
+                      f"contaminacion, se omite la llamada de procedencia.")
+        print(f"Modo de entrega efectivo: {modo}")
+
+        # ── PROCEDENCIA PREVIA (modo "filtrado") ─────────────────
+        # Inventaria los PDFs y los reparte por coincidencia exacta de cédula.
+        asignacion_filtrada = {}
+        docs_no_asignados = []
+        if modo == "filtrado":
+            print("Inventariando procedencia de los documentos...")
+            errores_proc = []
+            inventario = {}
+            for intento_p in range(1, MAX_INTENTOS_PROCEDENCIA + 1):
+                inventario = llamada_procedencia(file_ids, errores_previos=errores_proc)
+                errores_proc = validar_inventario_procedencia(inventario, total_pdfs)
+                if not errores_proc:
+                    if intento_p > 1:
+                        print(f"  [OK] Inventario corregido en el intento {intento_p}")
+                    break
+                print(f"  [WARN] Intento {intento_p}/{MAX_INTENTOS_PROCEDENCIA} de inventario con errores:")
+                for e in errores_proc:
+                    print(f"         - {e}")
+
+            asignacion_filtrada, docs_no_asignados = asignar_documentos_por_cedula(
+                inventario, casos, total_pdfs
+            )
+
+            for c in casos:
+                clave = (c.get("sujeto"), c.get("identificacion"))
+                n = len(asignacion_filtrada.get(clave, []))
+                print(f"  {c.get('sujeto')}: {n} documento(s) asignado(s) por cedula")
+            if docs_no_asignados:
+                print(f"  [!] {len(docs_no_asignados)} documento(s) sin asignar "
+                      f"(quedan apartados para revision humana)")
+                for d in docs_no_asignados:
+                    print(f"      - indice {d['indice']}: {d['documento']} | {d['razon']}")
+
+            # Los no asignados se reportan junto con los huérfanos del clasificador
+            huerfanos = list(huerfanos) + [
+                {"nombre": f"{d['documento']} (PDF #{d['indice'] + 1})", "razon": d["razon"]}
+                for d in docs_no_asignados
+            ]
+
         resultados = []
         fecha_hoy = datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
 
@@ -1391,7 +1652,14 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             print(f"[{i}/{len(casos)}] Analizando caso de: {sujeto}")
 
             # Determinar qué PDFs recibe el analizador
-            if modo == "completo":
+            if modo == "filtrado":
+                clave_caso = (caso.get("sujeto"), caso.get("identificacion"))
+                indices_caso = asignacion_filtrada.get(clave_caso, [])
+                file_ids_caso = [file_ids[i] for i in indices_caso]
+                otros_sujetos = []
+                print(f"  Recibe solo sus documentos: {len(file_ids_caso)} PDF(s) "
+                      f"(indices {indices_caso})")
+            elif modo == "completo":
                 file_ids_caso = file_ids
                 otros_sujetos = [
                     f"{(c.get('sujeto') or '').strip()} (cedula {c.get('identificacion') or 'no indicada'})"
@@ -1409,7 +1677,62 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
                 print(f"  PDFs asignados a este caso: {len(file_ids_caso)}")
 
             if not file_ids_caso:
-                print(f"  [WARN] Caso sin documentos válidos, saltando: {sujeto}")
+                # Red de seguridad: en modo "filtrado" un caso puede quedarse sin
+                # documentos si no se pudo leer la cedula de ninguno de sus PDFs.
+                # NUNCA se descarta en silencio: se genera igual un archivo para que
+                # el expediente exista en Dropbox y el abogado sepa que hay que
+                # revisarlo a mano. Un caso que desaparece es peor que uno marcado.
+                print(f"  [WARN] Caso sin documentos asignados: {sujeto}. "
+                      f"Se genera archivo de revision manual.")
+                texto_sin_docs = (
+                    "1. RESUMEN DEL EXPEDIENTE\n\n"
+                    f"Expediente de {sujeto}, identificacion {caso.get('identificacion') or 'no indicada'}.\n\n"
+                    "NO FUE POSIBLE ASIGNAR DOCUMENTOS A ESTE EXPEDIENTE\n\n"
+                    "El sistema identifico este caso en el correo, pero no pudo asociar con "
+                    "certeza ninguno de los PDFs adjuntos a esta persona. Esto ocurre cuando la "
+                    "cedula no se logra leer dentro de los documentos, o cuando la cedula leida "
+                    "no coincide con la del expediente.\n\n"
+                    "Por criterio de seguridad, el sistema prefiere no asignar documentos antes "
+                    "que asignarlos por suposicion: un soporte mal atribuido contaminaria el "
+                    "analisis de otra persona.\n\n"
+                    "2. ACCION REQUERIDA\n\n"
+                    "- Revisar manualmente los documentos del correo original.\n"
+                    "- Verificar que los soportes de este docente esten efectivamente adjuntos.\n"
+                    "- Revisar el archivo de ADVERTENCIA de este mismo correo, donde se listan "
+                    "los documentos que quedaron sin asignar.\n\n"
+                    "VEREDICTO: DESAPROBADO"
+                )
+                meta_sin = {
+                    "sujeto": caso.get("sujeto"),
+                    "identificacion": caso.get("identificacion"),
+                    "tipo": tipo_general,
+                    "subtipo": caso.get("subtipo"),
+                    "asunto": (caso.get("asunto") or "").strip(),
+                    "riesgo": "ALTO",
+                    "veredicto": "DESAPROBADO",
+                    "fecha": fecha_hoy,
+                }
+                resultados.append({
+                    "tipo":            tipo_general,
+                    "dependencia":     dependencia,
+                    "subtipo":         caso.get("subtipo"),
+                    "asunto":          (caso.get("asunto") or "").strip(),
+                    "sujeto":          caso.get("sujeto"),
+                    "identificacion":  caso.get("identificacion"),
+                    "radicado":        caso.get("radicado"),
+                    "vencimiento":     caso.get("vencimiento"),
+                    "riesgo":          "ALTO",
+                    "urgente":         caso.get("urgente", False),
+                    "veredicto":       "DESAPROBADO",
+                    "carpeta":         MAPA_CARPETAS.get((tipo_general, "DESAPROBADO"), "OTRO"),
+                    "nombre_archivo":  construir_nombre_archivo(caso, tipo_general, message_id),
+                    "analisis":        renderizar_analisis(texto_sin_docs, meta_sin),
+                    "analisis_texto":  texto_sin_docs,
+                    "integridad_documental_ok": False,
+                    "errores_integridad": ["No se pudo asignar ningun documento a este expediente."],
+                    "avisos_inventario": [],
+                    "message_id":      message_id
+                })
                 continue
 
             # Ejecutar análisis. Para ESCALAFON se audita en código la integridad
@@ -1544,6 +1867,7 @@ def version():
         "model":           MODEL,
         "formato_salida":  FORMATO_SALIDA,
         "modo_entrega":    MODO_ENTREGA,
+        "max_intentos_procedencia": MAX_INTENTOS_PROCEDENCIA,
         "limite_pdfs_modo_completo": LIMITE_PDFS_MODO_COMPLETO,
         "max_intentos_analisis_escalafon": MAX_INTENTOS_ANALISIS_ESCALAFON,
         "status":          "ok"
