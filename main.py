@@ -1,22 +1,33 @@
 """
-MICROSERVICIO JURÍDICO v3.8
-Arquitectura multi-caso: un correo puede contener varios casos del mismo tipo.
-Flujo: Clasificador identifica N casos → Analizador se ejecuta N veces → Devuelve resultados[].
-NUEVO v3.8: el campo "analisis" se entrega como HTML formateado listo para Dropbox.
+MICROSERVICIO JURÍDICO — v6.0
+El sistema analiza y distribuye; el abogado decide.
+
+Ya NO emite veredicto APROBADO/DESAPROBADO. Cada análisis se guarda en la carpeta
+PorRevisar del módulo, y el abogado lo mueve a Aprobados o Desaprobados según su
+criterio. El sistema solo hace un análisis riguroso, verifica qué documentos hay y
+cuáles faltan, y distribuye cada expediente a su carpeta.
+
+Flujo por correo:
+  1. Se acumulan los PDFs por message_id.
+  2. Clasificador: identifica tipo, dependencia y los casos del correo.
+  3. Procedencia (solo ESCALAFON con 2+ casos): inventaria cada PDF por separado y
+     Python asigna los documentos por coincidencia exacta de cédula; cada analizador
+     recibe SOLO los suyos.
+  4. Analizador: una llamada por caso. Produce el análisis en HTML.
+  5. Cada resultado sale con su carpeta destino (por tipo, sin veredicto).
+
+Módulos activos: ESCALAFON e IVC.
 """
 
 import os
 import re
 import time
 import html
-import threading
 import json
+import threading
 import unicodedata
-import difflib
 from datetime import datetime, timezone, timedelta
 
-# Zona horaria de Colombia (UTC-5)
-TZ_COLOMBIA = timezone(timedelta(hours=-5))
 from flask import Flask, request, jsonify
 import openai
 from dotenv import load_dotenv
@@ -25,150 +36,121 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# ── Versión del build ──────────────────────────────────────────
-BUILD_VERSION = "5.1"
-BUILD_DATE    = "2026-08-12"
-BUILD_FIX     = ("Procedencia por documento individual: cada PDF se inventaria en su propia llamada (en paralelo), de modo que el modelo nunca tiene que llevar la cuenta de que archivo es cual. Python asigna por coincidencia exacta de cedula. Corrige el fallo de la v5.0, donde el inventario en bloque confundia indices y repartia mal los documentos. Alcance: ESCALAFON con 2+ casos; IVC y CESANTIAS siguen en modo completo.")
+TZ_COLOMBIA = timezone(timedelta(hours=-5))
 
-# Intentos máximos de clasificación antes de aplicar corrección defensiva
-MAX_INTENTOS_CLASIFICACION = 3
-
-# Intentos máximos del ANALIZADOR de escalafón cuando se detecta contaminación entre
-# expedientes (documento marcado NO en la matriz de procedencia que reaparece después).
-# No aplica a otros módulos. Cada reintento reenvía los mismos PDFs (ya subidos), así que
-# el costo extra es solo de completion, no de subida de archivos.
-MAX_INTENTOS_ANALISIS_ESCALAFON = int(os.environ.get("MAX_INTENTOS_ANALISIS_ESCALAFON", "2"))
-
-# Modo de entrega de PDFs al analizador:
-#   "filtrado"  → (Opción E, por defecto) una llamada previa inventaria los PDFs y
-#                 Python los asigna por coincidencia exacta de cédula; cada caso recibe
-#                 SOLO sus documentos. La contaminación es imposible por construcción.
-#   "completo"  → cada caso recibe TODOS los PDFs y filtra por procedencia dentro del análisis.
-#   "subconjunto" → cada caso recibe solo los PDFs que el clasificador le asignó (modo original).
-MODO_ENTREGA = os.environ.get("MODO_ENTREGA", "filtrado").strip().lower()
-
-
-# Si el correo trae más PDFs que este límite, se vuelve al modo subconjunto
-# para no disparar el costo por token ni el tiempo de respuesta.
-LIMITE_PDFS_MODO_COMPLETO = int(os.environ.get("LIMITE_PDFS_MODO_COMPLETO", "16"))
+# ── Versión ────────────────────────────────────────────────────
+BUILD_VERSION = "6.0"
+BUILD_DATE    = "2026-08-27"
+BUILD_FIX     = ("Modelo sin veredicto: el sistema analiza y distribuye, el abogado decide. "
+                 "Se elimino la maquinaria de deteccion de contaminacion, reintentos y fail-closed, "
+                 "que existia para forzar un veredicto que ya no se emite. La contaminacion entre "
+                 "expedientes la previene la asignacion por cedula. Modulos activos: ESCALAFON e IVC.")
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 API_SECRET     = os.environ.get("API_SECRET", "clave_secreta_make")
 MODEL          = "gpt-5.4-mini-2026-03-17"
-
-# Formato de salida del campo "analisis": "html" o "texto"
 FORMATO_SALIDA = os.environ.get("FORMATO_SALIDA", "html").strip().lower()
 
+MAX_INTENTOS_CLASIFICACION = int(os.environ.get("MAX_INTENTOS_CLASIFICACION", "3"))
+
+# Modo de entrega de PDFs al analizador:
+#   "filtrado"  → (por defecto) ESCALAFON con 2+ casos: procedencia previa asigna por
+#                 cédula y cada caso recibe solo sus documentos.
+#   "completo"  → cada caso recibe todos los PDFs (IVC y correos de un solo caso).
+MODO_ENTREGA = os.environ.get("MODO_ENTREGA", "filtrado").strip().lower()
+
+# Por encima de este número de PDFs se omite la procedencia previa (coste/tiempo).
+LIMITE_PDFS_FILTRADO = int(os.environ.get("LIMITE_PDFS_FILTRADO", "16"))
+
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "prompts")
 
 # ── Acumulador de PDFs por correo ──────────────────────────────
 pendientes = {}
 lock_pendientes = threading.Lock()
 TTL_SEGUNDOS = 300
 
-# ── Mapa de tipos a archivos de prompt ────────────────────────
+# ── Mapa de tipo → prompt ──────────────────────────────────────
 MAPA_PROMPTS = {
-    "RESOLUCION":     "resolucion",
-    "RETIRO_FORZOSO": "retiro_forzoso",
-    "CESANTIAS":      "cesantias",
-    "IVC":            "ivc",
-    "ESCALAFON":      "escalafon",
-    "TUTELA":         "tutela",
-    "PETICION":       "peticion",
-    "REQUERIMIENTO":  "requerimiento",
-    "OFICIO":         "oficio",
-    "OTRO":           "general",
+    "IVC":       "ivc",
+    "ESCALAFON": "escalafon",
+    "OTRO":      "general",
 }
 
-# ── Mapa tipo+veredicto → carpeta destino ─────────────────────
+# ── Mapa de tipo → carpeta destino (sin veredicto) ─────────────
 MAPA_CARPETAS = {
-    ("RESOLUCION",     "APROBADO"):    "RESOLUCION_APROBADO",
-    ("RESOLUCION",     "DESAPROBADO"): "RESOLUCION_DESAPROBADO",
-    ("RETIRO_FORZOSO", "APROBADO"):    "RETIRO_FORZOSO_APROBADO",
-    ("RETIRO_FORZOSO", "DESAPROBADO"): "RETIRO_FORZOSO_DESAPROBADO",
-    ("CESANTIAS",      "APROBADO"):    "CESANTIAS_APROBADO",
-    ("CESANTIAS",      "DESAPROBADO"): "CESANTIAS_DESAPROBADO",
-    ("IVC",            "APROBADO"):    "IVC_APROBADO",
-    ("IVC",            "DESAPROBADO"): "IVC_DESAPROBADO",
-    ("ESCALAFON",      "APROBADO"):    "ESCALAFON_APROBADO",
-    ("ESCALAFON",      "DESAPROBADO"): "ESCALAFON_DESAPROBADO",
-    ("TUTELA",         "APROBADO"):    "TUTELA_APROBADO",
-    ("TUTELA",         "DESAPROBADO"): "TUTELA_DESAPROBADO",
-    ("PETICION",       "APROBADO"):    "PETICION_APROBADO",
-    ("PETICION",       "DESAPROBADO"): "PETICION_DESAPROBADO",
-    ("REQUERIMIENTO",  "APROBADO"):    "REQUERIMIENTO_APROBADO",
-    ("REQUERIMIENTO",  "DESAPROBADO"): "REQUERIMIENTO_DESAPROBADO",
+    "IVC":       "IVC_POR_REVISAR",
+    "ESCALAFON": "ESCALAFON_POR_REVISAR",
+    "OTRO":      "ADVERTENCIA",
 }
 
-PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "prompts")
+# Tipos cuyos soportes legítimos pueden llevar la identificación de un tercero
+# (en IVC el sujeto es una institución con NIT, pero los soportes traen cédulas de
+# representantes, rectores o propietarios). En ellos NO se filtra por cédula.
+TIPOS_CON_SOPORTES_DE_TERCEROS = {"IVC"}
 
 
 # ══════════════════════════════════════════════════════════════
-# RENDERIZADO HTML DEL ANÁLISIS
+# RENDERIZADO HTML
 # ══════════════════════════════════════════════════════════════
 
-# Estados de comparación → clase CSS (ver hoja de estilos)
 ESTADOS_CLASE = {
-    "coincide":                       "ok",
-    "aportado":                       "ok",
-    "cumple":                         "ok",
-    "coincide_parcialmente":          "warn",
-    "coincide_con_validacion_manual": "warn",
-    "requiere_validacion_manual":     "warn",
-    "no_verificable":                 "warn",
-    "no_aplica":                      "neutral",
-    "no_coincide":                    "bad",
-    "faltante":                       "bad",
-    "inconsistente":                  "bad",
+    "coincide":                   "ok",
+    "aportado":                   "ok",
+    "cumple":                     "ok",
+    "coincide_parcialmente":      "warn",
+    "requiere_validacion_manual": "warn",
+    "no_verificable":             "warn",
+    "no_aplica":                  "neutral",
+    "no_coincide":                "bad",
+    "faltante":                   "bad",
+    "inconsistente":              "bad",
 }
 
-# Colores del badge de veredicto
-VEREDICTO_ESTILO = {
-    "APROBADO":          ("#0f7b3d", "#e6f6ec", "#0f7b3d"),
-    "DESAPROBADO":       ("#b3261e", "#fdecea", "#b3261e"),
-    "REQUIERE_REVISION": ("#8a5a00", "#fff5e0", "#8a5a00"),
-    "ADVERTENCIA":       ("#8a5a00", "#fff5e0", "#8a5a00"),
+# Concepto jurídico sugerido → (color, fondo, borde, etiqueta). Informativo, no veredicto.
+CONCEPTO_ESTILO = {
+    "expediente_completo":        ("#0f7b3d", "#e6f6ec", "#0f7b3d", "Expediente completo"),
+    "viable_para_firma":          ("#0f7b3d", "#e6f6ec", "#0f7b3d", "Viable para firma"),
+    "pendiente_por_soportes":     ("#8a5a00", "#fff5e0", "#8a5a00", "Pendiente por soportes"),
+    "devolver_para_correccion":   ("#b3261e", "#fdecea", "#b3261e", "Devolver para corrección"),
+    "requiere_validacion_manual": ("#8a5a00", "#fff5e0", "#8a5a00", "Requiere validación manual"),
+    "sin_concepto":               ("#5b6b7b", "#eef1f5", "#5b6b7b", "Análisis para revisión"),
 }
 
 _RE_SEPARADOR_TABLA = re.compile(r'^\s*\|?[\s:|-]+\|?\s*$')
 _RE_TITULO_NUM      = re.compile(r'^\s*(\d{1,2})[\.\)]\s+(.{2,120})$')
-_RE_ETAPA           = re.compile(r'^\s*(ETAPA|SUBTIPO ACTIVO|MATRIZ)\b', re.IGNORECASE)
-# Veredicto en cualquier envoltorio: "- **VEREDICTO: APROBADO**", "15. VEREDICTO: APROBADO", etc.
-_RE_VEREDICTO       = re.compile(
-    r'^\s*(?:[-•·*]\s*)?(?:\d{1,2}[\.\)]\s*)?VEREDICTO\s*:\s*'
-    r'(APROBADO|DESAPROBADO|REQUIERE_REVISION|ADVERTENCIA)\s*\.?\s*$',
+_RE_ETAPA           = re.compile(r'^\s*(ETAPA|SUBTIPO|MATRIZ)\b', re.IGNORECASE)
+_RE_CONCEPTO = re.compile(
+    r'(?:conclusion_juridica|concepto_juridico_sugerido|concepto_sugerido)\s*[:=]\s*'
+    r'(expediente_completo|viable_para_firma|pendiente_por_soportes|'
+    r'devolver_para_correccion|requiere_validacion_manual)',
     re.IGNORECASE
 )
 
 
+def extraer_concepto_sugerido(texto: str) -> str:
+    """Lee el concepto jurídico sugerido. Informativo, no decide carpeta."""
+    m = _RE_CONCEPTO.search(texto or "")
+    return m.group(1).lower() if m else "sin_concepto"
+
+
 def _inline(texto_plano: str) -> str:
-    """Escapa el texto y convierte marcas inline de markdown a HTML."""
     t = html.escape(texto_plano)
-    # Protege el enmascarado de datos (1115****3434, 8.706***87) antes de
-    # interpretar los asteriscos como negrita, que destruiría el dato.
-    t = re.sub(r'(?<=\w)\*{2,}(?=\w)', lambda m: "\x00" * len(m.group()), t)
     t = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', t)
-    t = re.sub(r'__(.+?)__', r'<strong>\1</strong>', t)
     t = re.sub(r'(?<![\*\w])\*(?!\s)([^\*]+?)(?<!\s)\*(?![\*\w])', r'<em>\1</em>', t)
     t = re.sub(r'`([^`]+)`', r'<code>\1</code>', t)
-    return t.replace("\x00", "*")
+    return t
 
 
 def _limpiar_marcas(texto: str) -> str:
-    """
-    Quita marcas markdown conservando los guiones bajos internos.
-    Importante: los estados del sistema usan snake_case (no_aplica,
-    requiere_validacion_manual), así que solo se elimina el subrayado
-    cuando viene en pareja como marca de negrita (__texto__).
-    """
-    t = re.sub(r'__(.+?)__', r'\1', texto)   # negrita con doble guion bajo
-    t = re.sub(r'[\*`#]', '', t)             # asteriscos, comillas y almohadillas
+    t = re.sub(r'__(.+?)__', r'\1', texto)
+    t = re.sub(r'[\*`#]', '', t)
     return t.strip()
 
 
 def _celda(texto_plano: str) -> str:
-    """Renderiza una celda; si su contenido es un estado conocido, lo pinta."""
     crudo = _limpiar_marcas(texto_plano).strip()
     clave = crudo.lower().replace(" ", "_").replace("-", "_").strip(" .")
     clase = ESTADOS_CLASE.get(clave)
@@ -193,34 +175,28 @@ def _riesgo_clase(texto: str) -> str:
 
 
 def analisis_a_html_cuerpo(analisis_texto: str) -> str:
-    """Convierte el texto del análisis (markdown ligero) en HTML estructurado."""
     lineas = analisis_texto.replace("\r\n", "\n").split("\n")
     salida = []
     i = 0
     n = len(lineas)
 
     while i < n:
-        linea = lineas[i]
-        strip = linea.strip()
+        strip = lineas[i].strip()
 
-        # 1. El veredicto se muestra en el encabezado, no en el cuerpo.
-        #    Puede venir suelto, como viñeta, con negritas o dentro de un título numerado.
-        if _RE_VEREDICTO.match(_limpiar_marcas(strip)):
+        # La línea del concepto se muestra en el encabezado, no en el cuerpo.
+        if _RE_CONCEPTO.search(_limpiar_marcas(strip)) and len(strip) < 90:
             i += 1
             continue
 
-        # 2. Línea vacía
         if not strip:
             i += 1
             continue
 
-        # 3. Separadores decorativos (---, ===, ═══)
         if re.fullmatch(r'[-=_═━]{3,}', strip):
             salida.append('<hr>')
             i += 1
             continue
 
-        # 4. Bloque de tabla markdown
         if strip.startswith("|") and strip.count("|") >= 2:
             filas = []
             while i < n and lineas[i].strip().startswith("|"):
@@ -228,26 +204,13 @@ def analisis_a_html_cuerpo(analisis_texto: str) -> str:
                 if not _RE_SEPARADOR_TABLA.match(actual):
                     filas.append(_partir_fila(actual))
                 i += 1
-
             if filas:
-                encabezado = filas[0]
-                cuerpo_filas = filas[1:]
-                th = "".join(
-                    f'<th>{_inline(_limpiar_marcas(c))}</th>' for c in encabezado
-                )
-                trs = []
-                for fila in cuerpo_filas:
-                    tds = "".join(_celda(c) for c in fila)
-                    trs.append(f'<tr>{tds}</tr>')
-                salida.append(
-                    '<div class="tabla-wrap"><table>'
-                    f'<thead><tr>{th}</tr></thead>'
-                    f'<tbody>{"".join(trs)}</tbody>'
-                    '</table></div>'
-                )
+                th = "".join(f'<th>{_inline(_limpiar_marcas(c))}</th>' for c in filas[0])
+                trs = "".join(f'<tr>{"".join(_celda(c) for c in fila)}</tr>' for fila in filas[1:])
+                salida.append(f'<div class="tabla-wrap"><table><thead><tr>{th}</tr></thead>'
+                               f'<tbody>{trs}</tbody></table></div>')
             continue
 
-        # 5. Encabezados markdown (#, ##, ###)
         m_hash = re.match(r'^(#{1,6})\s+(.*)$', strip)
         if m_hash:
             texto = _limpiar_marcas(m_hash.group(2))
@@ -256,35 +219,21 @@ def analisis_a_html_cuerpo(analisis_texto: str) -> str:
             i += 1
             continue
 
-        # 6. Sección numerada: "1. RESUMEN DEL CASO" o "1. **Resumen del paquete**"
         m_num = _RE_TITULO_NUM.match(strip)
         if m_num:
             crudo = m_num.group(2).strip()
             resto = _limpiar_marcas(crudo)
-            # Un título numerado se reconoce si va en MAYÚSCULAS o si viene
-            # totalmente en negrita (**Resumen del paquete**), que es como lo
-            # generan varios prompts del sistema.
             era_negrita = bool(re.fullmatch(r'\*\*.+\*\*|__.+__', crudo))
-            es_titulo = (
-                len(resto) <= 90
-                and not resto.endswith((".", ":", ";"))
-                and any(ch.isalpha() for ch in resto)
-                and (resto.upper() == resto or era_negrita)
-            )
-            if es_titulo:
-                salida.append(
-                    f'<h2 class="seccion">'
-                    f'<span class="num">{m_num.group(1)}</span>'
-                    f'{html.escape(resto.upper())}</h2>'
-                )
+            if (len(resto) <= 90 and not resto.endswith((".", ":", ";"))
+                    and any(ch.isalpha() for ch in resto)
+                    and (resto.upper() == resto or era_negrita)):
+                salida.append(f'<h2 class="seccion"><span class="num">{m_num.group(1)}</span>'
+                               f'{html.escape(resto.upper())}</h2>')
                 i += 1
                 continue
 
-        # 7. Línea completamente en mayúsculas → subtítulo
         solo_texto = _limpiar_marcas(strip)
-        if (solo_texto
-                and len(solo_texto) <= 90
-                and solo_texto.upper() == solo_texto
+        if (solo_texto and len(solo_texto) <= 90 and solo_texto.upper() == solo_texto
                 and any(ch.isalpha() for ch in solo_texto)
                 and not solo_texto.startswith(("-", "•"))):
             etiqueta = "seccion" if _RE_ETAPA.match(solo_texto) else "subseccion"
@@ -292,7 +241,6 @@ def analisis_a_html_cuerpo(analisis_texto: str) -> str:
             i += 1
             continue
 
-        # 8. Lista de viñetas (agrupada)
         if re.match(r'^[-•·*]\s+', strip):
             items = []
             while i < n and re.match(r'^\s*[-•·*]\s+', lineas[i]) and lineas[i].strip():
@@ -304,7 +252,6 @@ def analisis_a_html_cuerpo(analisis_texto: str) -> str:
             salida.append(f'<ul>{"".join(items)}</ul>')
             continue
 
-        # 9. Párrafo normal
         salida.append(f'<p>{_inline(strip)}</p>')
         i += 1
 
@@ -312,11 +259,10 @@ def analisis_a_html_cuerpo(analisis_texto: str) -> str:
 
 
 def envolver_html(cuerpo_html: str, meta: dict) -> str:
-    """Envuelve el cuerpo en la plantilla institucional completa."""
-    veredicto = (meta.get("veredicto") or "REQUIERE_REVISION").upper()
-    color, fondo, borde = VEREDICTO_ESTILO.get(veredicto, ("#555", "#f0f0f0", "#999"))
+    concepto = (meta.get("concepto_sugerido") or "sin_concepto").lower()
+    color, fondo, borde, etiqueta = CONCEPTO_ESTILO.get(concepto, CONCEPTO_ESTILO["sin_concepto"])
 
-    sujeto  = meta.get("sujeto") or "Documento sin sujeto identificado"
+    sujeto  = meta.get("sujeto") or "Expediente sin sujeto identificado"
     cedula  = meta.get("identificacion") or ""
     tipo    = meta.get("tipo") or ""
     subtipo = meta.get("subtipo") or ""
@@ -326,7 +272,8 @@ def envolver_html(cuerpo_html: str, meta: dict) -> str:
 
     chips = []
     if cedula:
-        chips.append(f'<span class="chip"><b>C.C.</b> {html.escape(str(cedula))}</span>')
+        chips.append(f'<span class="chip"><b>{"NIT" if tipo == "IVC" else "C.C."}</b> '
+                     f'{html.escape(str(cedula))}</span>')
     if tipo:
         chips.append(f'<span class="chip"><b>Módulo</b> {html.escape(tipo)}</span>')
     if subtipo:
@@ -336,9 +283,7 @@ def envolver_html(cuerpo_html: str, meta: dict) -> str:
     chips.append(f'<span class="chip"><b>Fecha</b> {html.escape(fecha)}</span>')
     chips_html = "".join(chips)
 
-    asunto_html = (
-        f'<div class="asunto">{html.escape(asunto)}</div>' if asunto else ""
-    )
+    asunto_html = f'<div class="asunto">{html.escape(asunto)}</div>' if asunto else ""
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -359,8 +304,7 @@ def envolver_html(cuerpo_html: str, meta: dict) -> str:
   }}
   header {{
     background:linear-gradient(135deg,var(--azul) 0%,#1c5480 100%);
-    color:#fff; padding:26px 40px 22px;
-    border-bottom:4px solid var(--azul-claro);
+    color:#fff; padding:26px 40px 22px; border-bottom:4px solid var(--azul-claro);
   }}
   .inner {{ max-width:940px; margin:0 auto; }}
   .entidad {{
@@ -375,30 +319,26 @@ def envolver_html(cuerpo_html: str, meta: dict) -> str:
     border-radius:20px; padding:4px 13px; font-size:12px;
   }}
   .chip b {{ font-weight:600; opacity:.75; margin-right:4px; }}
-  .veredicto {{
-    display:inline-block; margin-top:16px; padding:9px 26px;
-    border-radius:5px; font-size:15px; font-weight:700; letter-spacing:1.1px;
+  .concepto {{
+    display:inline-block; margin-top:16px; padding:9px 26px; border-radius:5px;
+    font-size:14px; font-weight:700; letter-spacing:.6px;
     background:{fondo}; color:{color}; border:2px solid {borde};
   }}
+  .nota-decision {{ margin-top:10px; font-size:11.5px; opacity:.78; font-style:italic; max-width:640px; }}
   main {{
     max-width:940px; margin:26px auto 0; padding:34px 40px;
-    background:#fff; border-radius:8px;
-    box-shadow:0 1px 3px rgba(16,36,60,.09);
+    background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(16,36,60,.09);
   }}
   h2.seccion {{
     font-size:14.5px; font-weight:700; color:var(--azul);
-    text-transform:uppercase; letter-spacing:.6px;
-    border-left:4px solid var(--azul-claro);
-    background:#eef4fa; padding:9px 14px;
-    margin:30px 0 12px; border-radius:0 5px 5px 0;
+    text-transform:uppercase; letter-spacing:.6px; border-left:4px solid var(--azul-claro);
+    background:#eef4fa; padding:9px 14px; margin:30px 0 12px; border-radius:0 5px 5px 0;
     display:flex; align-items:center; gap:10px;
   }}
   h2.seccion:first-child {{ margin-top:0; }}
   .num {{
-    background:var(--azul-claro); color:#fff; font-size:11px;
-    width:21px; height:21px; border-radius:50%;
-    display:inline-flex; align-items:center; justify-content:center;
-    flex-shrink:0;
+    background:var(--azul-claro); color:#fff; font-size:11px; width:21px; height:21px;
+    border-radius:50%; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0;
   }}
   h3.subseccion {{
     font-size:12.5px; font-weight:700; color:var(--gris);
@@ -412,25 +352,19 @@ def envolver_html(cuerpo_html: str, meta: dict) -> str:
   }}
   p {{ margin:0 0 8px; }}
   ul {{ margin:6px 0 14px 4px; list-style:none; }}
-  li {{
-    position:relative; padding-left:18px; margin-bottom:6px;
-  }}
+  li {{ position:relative; padding-left:18px; margin-bottom:6px; }}
   li::before {{
-    content:""; position:absolute; left:2px; top:.62em;
-    width:6px; height:6px; border-radius:50%; background:var(--azul-claro);
+    content:""; position:absolute; left:2px; top:.62em; width:6px; height:6px;
+    border-radius:50%; background:var(--azul-claro);
   }}
   li.li-bad::before {{ background:#b3261e; }}
   li.li-warn::before {{ background:#c98a00; }}
   li.li-ok::before  {{ background:#0f7b3d; }}
-  .tabla-wrap {{
-    overflow-x:auto; margin:12px 0 20px;
-    border:1px solid var(--linea); border-radius:7px;
-  }}
+  .tabla-wrap {{ overflow-x:auto; margin:12px 0 20px; border:1px solid var(--linea); border-radius:7px; }}
   table {{ width:100%; border-collapse:collapse; font-size:13.5px; }}
   th {{
-    background:var(--azul); color:#fff; text-align:left;
-    padding:10px 14px; font-weight:600; font-size:12.5px;
-    text-transform:uppercase; letter-spacing:.4px; white-space:nowrap;
+    background:var(--azul); color:#fff; text-align:left; padding:10px 14px;
+    font-weight:600; font-size:12.5px; text-transform:uppercase; letter-spacing:.4px; white-space:nowrap;
   }}
   td {{ padding:9px 14px; border-top:1px solid var(--linea); vertical-align:top; }}
   tbody tr:nth-child(even) {{ background:#f7fafc; }}
@@ -443,15 +377,9 @@ def envolver_html(cuerpo_html: str, meta: dict) -> str:
   .estado.warn    {{ background:#fff5e0; color:#8a5a00; border:1px solid #f3d9a0; }}
   .estado.bad     {{ background:#fdecea; color:#b3261e; border:1px solid #f5c2bd; }}
   .estado.neutral {{ background:#eef1f5; color:#5b6b7b; border:1px solid #d5dce4; }}
-  code {{
-    background:#eef1f5; padding:1px 6px; border-radius:4px;
-    font-family:Consolas,Monaco,monospace; font-size:12.5px;
-  }}
+  code {{ background:#eef1f5; padding:1px 6px; border-radius:4px; font-family:Consolas,Monaco,monospace; font-size:12.5px; }}
   hr {{ border:0; border-top:1px solid var(--linea); margin:22px 0; }}
-  footer {{
-    max-width:940px; margin:18px auto 0; padding:0 40px;
-    font-size:11px; color:#9aa5b1; text-align:center;
-  }}
+  footer {{ max-width:940px; margin:18px auto 0; padding:0 40px; font-size:11px; color:#9aa5b1; text-align:center; }}
   @media print {{
     body {{ background:#fff; }}
     main {{ box-shadow:none; padding:0; }}
@@ -470,7 +398,11 @@ def envolver_html(cuerpo_html: str, meta: dict) -> str:
     <h1>{html.escape(sujeto)}</h1>
     {asunto_html}
     <div class="chips">{chips_html}</div>
-    <div class="veredicto">VEREDICTO: {html.escape(veredicto)}</div>
+    <div class="concepto">CONCEPTO SUGERIDO: {html.escape(etiqueta)}</div>
+    <div class="nota-decision">
+      Este es un análisis preventivo. La decisión final de aprobación o desaprobación
+      corresponde al abogado revisor.
+    </div>
   </div>
 </header>
 <main>
@@ -485,7 +417,6 @@ def envolver_html(cuerpo_html: str, meta: dict) -> str:
 
 
 def renderizar_analisis(analisis_texto: str, meta: dict) -> str:
-    """Punto de entrada: devuelve HTML o el texto crudo según FORMATO_SALIDA."""
     if FORMATO_SALIDA != "html":
         return analisis_texto
     try:
@@ -496,681 +427,93 @@ def renderizar_analisis(analisis_texto: str, meta: dict) -> str:
 
 
 # ══════════════════════════════════════════════════════════════
-# FUNCIONES AUXILIARES
+# UTILIDADES
 # ══════════════════════════════════════════════════════════════
 
-def validar_clasificacion(clasificacion: dict, total_pdfs: int, modo: str = "completo") -> list:
-    """
-    Audita la clasificación devuelta por el modelo.
-    Devuelve una lista de errores en texto (vacía si todo está correcto).
-    Estos errores se reinyectan al modelo en el reintento.
-
-    En modo "completo" el clasificador ya no reparte documentos, así que solo se
-    auditan los datos de identificación de cada caso. En modo "subconjunto" se
-    audita además la asignación de índices por caso.
-    """
-    errores = []
-    casos = clasificacion.get("casos", []) or []
-
-    # ── Validaciones comunes a ambos modos ───────────────────────
-    if not casos:
-        errores.append("No devolviste ningun caso. Debe haber al menos un caso.")
-        return errores
-
-    sujetos_vistos = set()
-    for n, caso in enumerate(casos, start=1):
-        sujeto = (caso.get("sujeto") or "").strip().upper()
-        ident  = str(caso.get("identificacion") or "").strip()
-
-        if not sujeto:
-            errores.append(f"El caso numero {n} no tiene el campo 'sujeto'. Es obligatorio.")
-            continue
-
-        clave = (sujeto, ident)
-        if clave in sujetos_vistos:
-            errores.append(
-                f"El sujeto '{sujeto}' aparece en mas de un caso. "
-                f"Un mismo docente es UN SOLO caso."
-            )
-        sujetos_vistos.add(clave)
-
-    if clasificacion.get("cantidad_casos") is not None:
-        if clasificacion.get("cantidad_casos") != len(casos):
-            errores.append(
-                f"cantidad_casos dice {clasificacion.get('cantidad_casos')} pero el array "
-                f"'casos' tiene {len(casos)} elementos."
-            )
-
-    # En "completo" y "filtrado" el clasificador no reparte documentos:
-    # solo identifica los casos, así que no hay índices que auditar.
-    if modo in ("completo", "filtrado"):
-        return errores
-
-    # ── Validaciones exclusivas del modo subconjunto ─────────────
-    huerfanos = clasificacion.get("documentos_huerfanos", []) or []
-    indices_validos = set(range(total_pdfs))
-    vistos = {}
-    fuera_de_rango = []
-
-    def registrar(idx, dueno):
-        if not isinstance(idx, int) or idx not in indices_validos:
-            fuera_de_rango.append(idx)
-            return
-        vistos.setdefault(idx, []).append(dueno)
-
-    for caso in casos:
-        sujeto = caso.get("sujeto") or "SIN_SUJETO"
-        for idx in caso.get("indices_documentos", []) or []:
-            registrar(idx, sujeto)
-
-    for h in huerfanos:
-        idx = h.get("indice") if isinstance(h, dict) else None
-        if idx is not None:
-            registrar(idx, "HUERFANO")
-
-    if fuera_de_rango:
-        errores.append(
-            f"Usaste los indices {fuera_de_rango}, que NO EXISTEN. Se recibieron "
-            f"{total_pdfs} PDFs, por lo que los unicos indices validos son de 0 a {total_pdfs - 1}."
-        )
-
-    repetidos = {i: d for i, d in vistos.items() if len(d) > 1}
-    if repetidos:
-        detalle = "; ".join(f"indice {i} reclamado por {d}" for i, d in repetidos.items())
-        errores.append(f"Hay indices asignados a mas de un caso: {detalle}.")
-
-    faltantes = sorted(indices_validos - set(vistos.keys()))
-    if faltantes:
-        errores.append(
-            f"Los indices {faltantes} no fueron asignados a ningun caso ni marcados como huerfanos."
-        )
-
-    ROLES_TERCERO = {"cedula_contratista", "tarjeta_profesional"}
-    for caso in casos:
-        sujeto = (caso.get("sujeto") or "").strip().upper()
-        docs = caso.get("documentos", []) or []
-        sin_titular = [d.get("indice") for d in docs if not (d.get("titular") or "").strip()]
-        if sin_titular:
-            errores.append(
-                f"En el caso de '{sujeto}' los documentos con indice {sin_titular} no traen "
-                f"el campo 'titular', que es obligatorio."
-            )
-        if not sujeto:
-            continue
-        for doc in docs:
-            titular = (doc.get("titular") or "").strip().upper()
-            rol = (doc.get("rol") or "").strip().lower()
-            if not titular or titular == "DESCONOCIDO" or rol in ROLES_TERCERO:
-                continue
-            if titular != sujeto:
-                errores.append(
-                    f"CRUCE DE DOCUMENTOS: en el caso de '{sujeto}' incluiste el documento "
-                    f"indice {doc.get('indice')} cuyo titular es '{titular}'. Muevelo."
-                )
-
-    return errores
+_RE_DIGITOS = re.compile(r'\d{5,}')
 
 
-# ══════════════════════════════════════════════════════════════
-# INTEGRIDAD DOCUMENTAL DEL ANALIZADOR (solo módulo ESCALAFÓN)
-# ══════════════════════════════════════════════════════════════
-#
-# validar_clasificacion() (arriba) audita el JSON del CLASIFICADOR.
-# Lo de aquí abajo audita el TEXTO del ANALIZADOR: concretamente, que
-# ningún documento marcado "NO" en su propia matriz de procedencia
-# (sección 2 de su salida) sea usado como soporte más adelante en el
-# mismo análisis. Es el mismo patrón (parsear una afirmación
-# estructurada del modelo y verificarla en código) aplicado al punto
-# donde de verdad se produce la contaminación entre expedientes.
-#
-# El ancla es la CÉDULA: es un token numérico rígido que un regex
-# extrae y compara con exactitud, sin necesitar NLP. El prompt ya
-# prohíbe enmascarar cédulas con asteriscos precisamente para que
-# esta verificación sea posible.
-
-_RE_FILA_PROCEDENCIA = re.compile(r'^\s*\|(.+)\|\s*$')
-_RE_ES_SEPARADOR      = re.compile(r'^[\s|:\-]+$')
-_RE_DIGITOS           = re.compile(r'\d{5,}')
-
-# Palabras demasiado genéricas en este dominio para servir de ancla por sí solas
-# (aparecerían en casi cualquier expediente y generarían falsos positivos).
-_STOPWORDS_DOMINIO = {
-    "grado", "nivel", "docente", "profesional", "certificado", "diplomado",
-    "programa", "formacion", "pedagogia", "pedagogica", "pedagogico", "educacion",
-    "educativa", "educativo", "institucion", "universidad", "universitaria",
-    "resolucion", "acto", "titulo", "curso", "licenciado", "licenciados",
-    "escalafon", "nacional", "distrital", "secretaria", "colombia",
-    "horas", "credito", "creditos", "fecha", "numero", "basica", "basico",
-    "estrategias", "competencias", "aprendizaje", "dificultades",
-}
-
-
-def _normalizar_ascii(texto: str) -> str:
-    """minúsculas, sin tildes, solo alfanumérico y espacios."""
-    t = unicodedata.normalize("NFD", texto or "")
-    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
-    t = t.lower()
-    t = re.sub(r'[^a-z0-9\s]', ' ', t)
-    return re.sub(r'\s+', ' ', t).strip()
-
-
-def _es_variante_de_generica(token: str, umbral: float = 0.82) -> bool:
-    """
-    True si el token es una palabra genérica del dominio o una variante morfológica
-    suya ('pedagogia' vs 'pedagogica', 'universitaria' vs 'universidad'). Estas
-    palabras aparecen en casi cualquier expediente y no sirven como evidencia de
-    que un documento ajeno se haya filtrado: usarlas como ancla produce falsos
-    positivos (caso real: 'pedagogia' del diplomado de otro docente coincidiendo
-    con 'Universidad Pedagogica y Tecnologica' del titulo propio).
-    """
-    if token in _STOPWORDS_DOMINIO:
-        return True
-    if token.isdigit():
-        return False
-    return any(
-        difflib.SequenceMatcher(None, token, sw).ratio() >= umbral
-        for sw in _STOPWORDS_DOMINIO
-    )
-
-
-def _tokens_clave(texto: str) -> set:
-    """
-    Tokens 'anclables' de una frase: alfabéticos de 5+ letras o numéricos de 3+
-    dígitos, quitando las palabras genéricas del dominio y sus variantes.
-    Sobreviven "Areandina", "Biologo", "Politecnico", "Historiador", "1485";
-    no sobreviven "grado", "formacion", "pedagogia", "pedagogica".
-    """
-    normal = _normalizar_ascii(texto)
-    tokens = set()
-    for tok in normal.split():
-        if tok.isdigit() and len(tok) >= 3:
-            tokens.add(tok)
-        elif tok.isalpha() and len(tok) >= 5 and not _es_variante_de_generica(tok):
-            tokens.add(tok)
-    return tokens
-
-
-def _candidatos_difusos(texto: str) -> set:
-    """
-    Candidatos de comparación para el lado del BLOQUE (texto libre del modelo),
-    tolerantes a que un nombre propio se escriba junto o separado ("Areandina"
-    vs "Área Andina", visto en los documentos reales de este proyecto). Incluye
-    palabras sueltas y concatenaciones de palabras adyacentes de 3+ letras.
-    """
-    normal = _normalizar_ascii(texto)
-    palabras = [p for p in normal.split() if len(p) >= 3]
-    candidatos = set(palabras)
-    for i in range(len(palabras) - 1):
-        candidatos.add(palabras[i] + palabras[i + 1])
-    return candidatos
-
-
-def _hay_coincidencia_difusa(token_doc: str, candidatos_bloque: set, umbral: float = 0.85) -> bool:
-    """
-    True si token_doc (alfabético, del documento excluido) coincide de forma
-    exacta o aproximada con algún candidato del bloque. Los tokens numéricos se
-    comparan aparte, siempre de forma exacta (una cifra legal no admite tolerancia).
-    """
-    if token_doc in candidatos_bloque:
-        return True
-    if token_doc.isdigit():
-        return False
-    mejor = max(
-        (difflib.SequenceMatcher(None, token_doc, cand).ratio() for cand in candidatos_bloque),
-        default=0.0,
-    )
-    return mejor >= umbral
-
-
-def _normalizar_cedula(texto: str):
-    """Extrae el primer número de 5+ dígitos de una celda, sin puntos ni espacios."""
+def _normalizar_cedula(texto):
     if not texto:
         return None
-    m = _RE_DIGITOS.search(texto.replace(".", "").replace(" ", ""))
+    m = _RE_DIGITOS.search(str(texto).replace(".", "").replace(" ", ""))
     return m.group(0) if m else None
 
 
-def _es_afirmativo(texto: str) -> bool:
-    t = (texto or "").strip().upper()
-    return t.startswith("S") and "NO" not in t.split()[:1]  # "SI", "SÍ", "Si." ...
-
-
-def _es_negativo(texto: str) -> bool:
-    t = (texto or "").strip().upper()
-    return t.startswith("NO")
-
-
-def extraer_matriz_procedencia(texto: str):
-    """
-    Localiza la tabla markdown que sigue al encabezado "MATRIZ DE PROCEDENCIA"
-    y devuelve (filas, offset_fin_tabla). offset_fin_tabla es la posición de
-    caracter donde termina la tabla, para poder aislar "todo lo que viene después".
-    filas = lista de dicts: {"documento", "cedula", "dato_clave", "pertenece"}.
-    Devuelve ([], None) si no encuentra la tabla.
-    """
-    m_enc = re.search(r'MATRIZ\s+DE\s+PROCEDENCIA', texto, re.IGNORECASE)
-    if not m_enc:
-        return [], None
-
-    resto = texto[m_enc.end():]
-    lineas = resto.split("\n")
-
-    inicio_tabla = None
-    for idx, linea in enumerate(lineas):
-        if linea.strip().startswith("|"):
-            inicio_tabla = idx
-            break
-    if inicio_tabla is None:
-        return [], None
-
-    filas_crudas = []
-    fin_tabla_idx = inicio_tabla
-    for idx in range(inicio_tabla, len(lineas)):
-        linea = lineas[idx]
-        if not linea.strip().startswith("|"):
-            break
-        fin_tabla_idx = idx
-        celdas = [c.strip() for c in linea.strip().strip("|").split("|")]
-        if all(_RE_ES_SEPARADOR.match(c) for c in celdas):
-            continue  # fila separadora (|---|---|)
-        filas_crudas.append(celdas)
-
-    if not filas_crudas:
-        return [], None
-
-    encabezado = [c.lower() for c in filas_crudas[0]]
-
-    def _col(nombres_posibles, default):
-        for i, c in enumerate(encabezado):
-            if any(n in c for n in nombres_posibles):
-                return i
-        return default
-
-    idx_doc    = _col(["documento"], 0)
-    idx_cedula = _col(["cédula", "cedula"], min(2, len(encabezado) - 1))
-    idx_clave  = _col(["dato clave", "clave"], None)
-    idx_pert   = len(encabezado) - 1  # la última columna siempre es SI/NO por especificación
-
-    filas = []
-    for celdas in filas_crudas[1:]:
-        if len(celdas) <= idx_pert:
-            continue
-        doc     = celdas[idx_doc] if idx_doc < len(celdas) else ""
-        cedula  = _normalizar_cedula(celdas[idx_cedula]) if idx_cedula < len(celdas) else None
-        clave   = celdas[idx_clave] if (idx_clave is not None and idx_clave < len(celdas)) else ""
-        pertyxt = celdas[idx_pert]
-        if _es_negativo(pertyxt):
-            pert = "NO"
-        elif _es_afirmativo(pertyxt):
-            pert = "SI"
-        else:
-            pert = "?"
-        filas.append({"documento": doc, "cedula": cedula, "dato_clave": clave, "pertenece": pert})
-
-    # offset absoluto en el texto ORIGINAL donde termina la tabla
-    offset_relativo = sum(len(l) + 1 for l in lineas[:fin_tabla_idx + 1])
-    offset_fin_tabla = m_enc.end() + offset_relativo
-
-    return filas, offset_fin_tabla
-
-
-def validar_analisis_escalafon(texto: str, caso: dict, total_pdfs_enviados: int) -> tuple:
-    """
-    Audita la integridad documental del análisis de ESCALAFÓN y devuelve una tupla
-    (bloqueantes, advertencias).
-
-    BLOQUEANTES: contaminación real entre expedientes, es decir, el análisis usa
-    después de su propia matriz de procedencia un documento que él mismo marcó
-    como NO perteneciente a este docente. Fuerzan reintento y, si persisten,
-    veredicto DESAPROBADO. Un dato de otra persona puede cambiar el sentido
-    jurídico del acto, así que aquí se falla en cerrado.
-
-    ADVERTENCIAS: defectos de forma del inventario (conteo de filas que no cuadra,
-    filas duplicadas). Indican que el modelo leyó mal el lote, pero no implican por
-    sí solos que el análisis esté contaminado. Se registran para diagnóstico y se
-    reinyectan en el reintento, pero NUNCA fuerzan el veredicto: castigar por esto
-    produciría falsos DESAPROBADO en análisis cuyo contenido es correcto.
-    """
-    bloqueantes = []
-    advertencias = []
-
-    filas, offset_fin_tabla = extraer_matriz_procedencia(texto)
-
-    if not filas:
-        # Sin matriz no hay nada que auditar: no se puede afirmar que el análisis
-        # esté limpio, así que esto sí bloquea.
-        bloqueantes.append(
-            "No se encontro una tabla con formato markdown debajo del encabezado "
-            "'MATRIZ DE PROCEDENCIA' (seccion 2). Es obligatoria: una fila numerada "
-            "por cada PDF recibido, con columnas Documento, Cedula, Dato clave y "
-            "Pertenece a este docente (SI/NO)."
-        )
-        return bloqueantes, advertencias
-
-    if len(filas) != total_pdfs_enviados:
-        advertencias.append(
-            f"Tu MATRIZ DE PROCEDENCIA tiene {len(filas)} fila(s) pero se te enviaron "
-            f"{total_pdfs_enviados} PDFs. Debe haber exactamente una fila por cada PDF "
-            f"recibido, sin repetir ninguno y sin omitir ninguno. No rellenes la tabla "
-            f"duplicando documentos para alcanzar el numero: si un documento no lo "
-            f"pudiste leer, dilo en su fila."
-        )
-
-    # Filas duplicadas: sintoma de que el modelo relleno la tabla en vez de leer
-    # cada PDF. Es un defecto de inventario, no contaminacion.
-    vistos = {}
-    for f in filas:
-        firma = (_normalizar_ascii(f["documento"]), _normalizar_ascii(f["dato_clave"]))
-        if not any(firma):
-            continue
-        vistos[firma] = vistos.get(firma, 0) + 1
-    repetidas = [f"'{d}' ({n} veces)" for (d, _), n in vistos.items() if n > 1]
-    if repetidas:
-        advertencias.append(
-            f"Tu MATRIZ DE PROCEDENCIA repite el mismo documento en varias filas: "
-            f"{'; '.join(repetidas)}. Cada PDF distinto va en una sola fila con su "
-            f"propio contenido; no dupliques entradas."
-        )
-
-    cedula_propia = _normalizar_cedula(str(caso.get("identificacion") or ""))
-
-    # Chequeo por cédula: cubre el caso en que un número de identificación ajeno
-    # se filtra en secciones que sí lo citarían (identidad, decisión del acto,
-    # prosa). Es un complemento del chequeo por tokens de abajo, no el único: las
-    # matrices de título y formación pedagógica de este módulo no llevan columna
-    # de cédula, así que ahí la defensa real es la de "Dato clave".
-    cedulas_excluidas = {
-        f["cedula"] for f in filas
-        if f["pertenece"] == "NO" and f["cedula"] and f["cedula"] != cedula_propia
-    }
-
-    resto = texto[offset_fin_tabla:] if offset_fin_tabla is not None else ""
-
-    if cedulas_excluidas and resto:
-        cedulas_en_resto = set(_RE_DIGITOS.findall(resto.replace(".", "").replace(" ", "")))
-        filtradas = cedulas_excluidas & cedulas_en_resto
-        for ced in sorted(filtradas):
-            doc_origen = next(
-                (f["documento"] for f in filas if f["cedula"] == ced and f["pertenece"] == "NO"),
-                "documento no identificado"
-            )
-            bloqueantes.append(
-                f"CONTAMINACION DETECTADA: marcaste el documento '{doc_origen}' (cedula {ced}) "
-                f"como NO perteneciente a este docente en tu matriz de procedencia, pero esa misma "
-                f"cedula vuelve a aparecer despues en tu analisis. Revisa TODAS las matrices "
-                f"posteriores (titulo academico, formacion pedagogica, soportes) y elimina "
-                f"cualquier fila o dato que provenga de ese documento."
-            )
-
-    # Verificación por "Dato clave": en este sistema las matrices de título y de
-    # formación pedagógica NUNCA llevan columna de cédula (revisar sección 15 del
-    # prompt), así que la cédula sola no basta para detectar la contaminación real
-    # observada en producción (una institución o título ajeno filtrándose en esas
-    # tablas). El ancla es el conjunto de tokens distintivos del "Dato clave" que
-    # el propio modelo escribió en la fila excluida al hacer el inventario.
-    #
-    # Antes de comparar, se restan los tokens que el docente YA tiene de forma
-    # legítima en sus propios documentos (filas SI). Esto evita falsos positivos
-    # cuando dos personas del mismo lote comparten institución (p. ej. ambas
-    # tienen un certificado de la misma universidad): la palabra compartida no
-    # cuenta como evidencia de contaminación si el propio docente también la
-    # tiene de forma legítima.
-    docs_excluidos = [f for f in filas if f["pertenece"] == "NO"]
-    tokens_propios = set()
-    for f in filas:
-        if f["pertenece"] == "SI":
-            tokens_propios |= _tokens_clave(f["dato_clave"])
-
-    if docs_excluidos and resto:
-        for patron, nombre_seccion in [
-            (r'MATRIZ\s+DE\s+T[ÍI]TULO', "MATRIZ DE TÍTULO ACADÉMICO"),
-            (r'MATRIZ\s+DE\s+FORMACI[ÓO]N', "MATRIZ DE FORMACIÓN PEDAGÓGICA"),
-        ]:
-            m_sec = re.search(patron, resto, re.IGNORECASE)
-            if not m_sec:
-                continue
-            bloque = resto[m_sec.end(): m_sec.end() + 2500]
-            m_fin = re.search(r'\n\s*\d{1,2}\.\s+[A-ZÁÉÍÓÚÑ]', bloque)
-            if m_fin:
-                bloque = bloque[:m_fin.start()]
-            candidatos_bloque = _candidatos_difusos(bloque)
-
-            for doc in docs_excluidos:
-                tokens_doc = _tokens_clave(doc["dato_clave"]) - tokens_propios
-                if not tokens_doc:
-                    continue  # todo lo distintivo de este doc coincide con material propio
-                encontrados = sorted(
-                    t for t in tokens_doc if _hay_coincidencia_difusa(t, candidatos_bloque)
-                )
-                if encontrados:
-                    bloqueantes.append(
-                        f"CONTAMINACION DETECTADA: el documento '{doc['documento']}' "
-                        f"('{doc['dato_clave']}') fue marcado NO en tu matriz de procedencia "
-                        f"(no pertenece a este docente), pero en tu {nombre_seccion} aparecen los "
-                        f"terminos {encontrados} que corresponden a ese documento y no a "
-                        f"ninguno de los documentos propios de este docente. Elimina esa fila y, si "
-                        f"el docente no tiene soporte propio para esa matriz, usa 'no aportado'."
-                    )
-                    break  # un aviso por seccion evita ruido repetido
-
-    return bloqueantes, advertencias
-
-
-# ══════════════════════════════════════════════════════════════
-# PROCEDENCIA PREVIA — asignación determinista de PDFs por cédula
-# ══════════════════════════════════════════════════════════════
-#
-# Arquitectura "filtrado" (Opción E): antes de analizar, una llamada
-# dedicada LEE cada PDF y extrae únicamente nombre y cédula de su
-# titular. La ASIGNACIÓN de cada documento a un expediente la hace
-# Python, comparando esa cédula con la del caso: coincidencia exacta
-# de dígitos, sin juicio del modelo.
-#
-# Con esto el analizador recibe solo los PDFs de su docente, así que
-# la contaminación entre expedientes deja de ser posible por
-# construcción, no por verificación posterior.
-#
-# Criterio estricto (decisión de diseño): un documento cuya cédula no
-# se pudo leer, o que no coincide con ningún caso, NO se entrega a
-# nadie. Queda apartado y se reporta para revisión humana. Es
-# preferible un documento sin asignar a uno asignado por suposición.
-
-def _procedencia_de_un_pdf(file_id: str, indice: int) -> dict:
-    """
-    Inventaria UN solo PDF. Al enviar un único documento por llamada, el modelo no
-    tiene que llevar la cuenta de qué archivo es cuál: el índice lo pone Python.
-    Esto elimina el problema de seguimiento de índices, que era la causa de que el
-    inventario en bloque asignara cédulas al documento equivocado.
-    """
-    prompt = cargar_prompt("procedencia")
-    base = {
-        "indice": indice,
-        "documento": "documento no identificado",
-        "titular": None,
-        "cedula": None,
-        "dato_clave": "no identificado",
-        "legible": False,
-    }
-    try:
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "user", "content": construir_content([file_id], prompt)}],
-        )
-        texto = response.choices[0].message.content.strip()
-
-        datos = None
-        if "```" in texto:
-            for p in texto.split("```"):
-                p = p.strip()
-                if p.startswith("json"):
-                    p = p[4:].strip()
-                try:
-                    datos = json.loads(p)
-                    break
-                except Exception:
-                    continue
-        if datos is None:
-            datos = json.loads(texto)
-
-        cedula = datos.get("cedula")
-        cedula = re.sub(r"\D", "", str(cedula)) if cedula is not None else None
-        if cedula is not None and len(cedula) < 5:
-            cedula = None
-
-        base.update({
-            "documento":  datos.get("documento") or base["documento"],
-            "titular":    datos.get("titular"),
-            "cedula":     cedula,
-            "dato_clave": datos.get("dato_clave") or base["dato_clave"],
-            "legible":    bool(datos.get("legible")) and bool(cedula),
-        })
-    except Exception as e:
-        # Cualquier fallo deja el documento como ilegible: se apartará, nunca se
-        # asignará por suposición.
-        print(f"  [WARN] No se pudo inventariar el PDF #{indice}: {e}")
-
-    return base
-
-
-def llamada_procedencia(file_ids: list) -> dict:
-    """
-    Inventaria todos los PDFs, uno por llamada y en paralelo.
-    Devuelve {"documentos": [...]} con una entrada por índice, en orden.
-    """
-    resultados = [None] * len(file_ids)
-    hilos = []
-    lock = threading.Lock()
-
-    def trabajo(idx, fid):
-        r = _procedencia_de_un_pdf(fid, idx)
-        with lock:
-            resultados[idx] = r
-
-    for idx, fid in enumerate(file_ids):
-        t = threading.Thread(target=trabajo, args=(idx, fid), daemon=True)
-        t.start()
-        hilos.append(t)
-
-    for t in hilos:
-        t.join(timeout=180)
-
-    for idx in range(len(file_ids)):
-        if resultados[idx] is None:
-            resultados[idx] = {
-                "indice": idx,
-                "documento": "documento no inventariado",
-                "titular": None,
-                "cedula": None,
-                "dato_clave": "no identificado",
-                "legible": False,
-            }
-
-    return {"total_pdfs": len(file_ids), "documentos": resultados}
-
-
-def asignar_documentos_por_cedula(inventario: dict, casos: list, total_pdfs: int) -> tuple:
-    """
-    Asigna cada PDF a un caso comparando la cédula leída con la del caso.
-    La comparación es exacta sobre dígitos: no hay heurística ni juicio.
-
-    Devuelve (asignacion, no_asignados):
-      asignacion    -> {clave_caso: [indices]}  con clave_caso = (sujeto, identificacion)
-      no_asignados  -> [ {indice, documento, titular, cedula, razon} ]
-    """
-    docs = inventario.get("documentos", []) or []
-
-    # Índice de cédula -> caso
-    cedula_a_caso = {}
-    for c in casos:
-        ced = _normalizar_cedula(str(c.get("identificacion") or ""))
-        if ced:
-            cedula_a_caso[ced] = (c.get("sujeto"), c.get("identificacion"))
-
-    asignacion = {(c.get("sujeto"), c.get("identificacion")): [] for c in casos}
-    no_asignados = []
-    vistos = set()
-
-    for d in docs:
-        idx = d.get("indice")
-        if not isinstance(idx, int) or not (0 <= idx < total_pdfs) or idx in vistos:
-            continue
-        vistos.add(idx)
-
-        legible = d.get("legible", True)
-        ced = _normalizar_cedula(str(d.get("cedula") or ""))
-
-        if not legible or not ced:
-            no_asignados.append({
-                "indice": idx,
-                "documento": d.get("documento") or "documento sin identificar",
-                "titular": d.get("titular"),
-                "cedula": d.get("cedula"),
-                "razon": "No se pudo leer con certeza el titular o la cedula del documento."
-            })
-            continue
-
-        clave = cedula_a_caso.get(ced)
-        if clave is None:
-            no_asignados.append({
-                "indice": idx,
-                "documento": d.get("documento") or "documento sin identificar",
-                "titular": d.get("titular"),
-                "cedula": d.get("cedula"),
-                "razon": (f"La cedula {ced} no corresponde a ninguno de los expedientes "
-                          f"identificados en este correo.")
-            })
-            continue
-
-        asignacion[clave].append(idx)
-
-    # PDFs que el modelo no inventarió en absoluto
-    for idx in sorted(set(range(total_pdfs)) - vistos):
-        no_asignados.append({
-            "indice": idx,
-            "documento": "documento no inventariado",
-            "titular": None,
-            "cedula": None,
-            "razon": "El inventario de procedencia no incluyo este PDF."
-        })
-
-    for k in asignacion:
-        asignacion[k] = sorted(asignacion[k])
-
-    return asignacion, no_asignados
-
-
-# Prompts que NO deben caer al fallback general.txt: si faltan, el sistema no
-# puede cumplir su función y es mejor saberlo de inmediato que degradarse en
-# silencio (procedencia.txt es un extractor de datos; general.txt es un
-# analizador jurídico, y sustituirlo produciría basura).
-PROMPTS_SIN_FALLBACK = {"procedencia", "clasificador"}
+def limpiar_texto(texto: str) -> str:
+    if not texto:
+        return ""
+    texto = unicodedata.normalize('NFD', texto)
+    texto = "".join(c for c in texto if unicodedata.category(c) != 'Mn')
+    texto = re.sub(r'[<>:"/\\|?*]', '', texto)
+    texto = re.sub(r'\s+', ' ', texto)
+    return texto.strip()
 
 
 def cargar_prompt(nombre: str) -> str:
     ruta = os.path.join(PROMPTS_DIR, f"{nombre}.txt")
     if not os.path.exists(ruta):
-        if nombre in PROMPTS_SIN_FALLBACK:
-            raise FileNotFoundError(
-                f"Falta el prompt obligatorio '{nombre}.txt' en {PROMPTS_DIR}. "
-                f"Sin el, el sistema no puede operar correctamente."
-            )
+        if nombre in {"procedencia", "clasificador"}:
+            raise FileNotFoundError(f"Falta el prompt obligatorio '{nombre}.txt' en {PROMPTS_DIR}.")
         ruta = os.path.join(PROMPTS_DIR, "general.txt")
     with open(ruta, "r", encoding="utf-8") as f:
         return f.read()
 
 
+def construir_content(file_ids: list, texto_prompt: str) -> list:
+    content = [{"type": "file", "file": {"file_id": fid}} for fid in file_ids]
+    content.append({"type": "text", "text": texto_prompt})
+    return content
+
+
+def construir_nombre_archivo(caso: dict, tipo: str, message_id: str) -> str:
+    """
+    SUJETO - IDENTIFICACION - TIPO [ - SUBTIPO] - YYYY-MM-DD
+    El subtipo se incluye cuando existe (en IVC ocho trámites comparten carpeta).
+    """
+    fecha = datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
+    sujeto = limpiar_texto(caso.get("sujeto") or "")
+    identificacion = limpiar_texto(caso.get("identificacion") or "")
+
+    subtipo = ""
+    subtipo_raw = (caso.get("subtipo") or "").strip()
+    if subtipo_raw:
+        s = limpiar_texto(subtipo_raw).upper()
+        s = re.sub(r'^(IVC|ESCALAFON)[_\s-]*', '', s)
+        subtipo = s.replace("_", "-").strip("- ")
+
+    if sujeto and identificacion:
+        partes = [sujeto, identificacion, tipo]
+    elif sujeto:
+        partes = [sujeto, tipo]
+    else:
+        asunto = limpiar_texto(caso.get("asunto") or "Sin asunto")[:60]
+        sufijo = message_id[-8:] if message_id else "sinid"
+        partes = [asunto, tipo]
+        if subtipo:
+            partes.append(subtipo)
+        partes += [fecha, sufijo]
+        return " - ".join(partes)[:180]
+
+    if subtipo:
+        partes.append(subtipo)
+    partes.append(fecha)
+    return " - ".join(partes)[:180]
+
+
+# ══════════════════════════════════════════════════════════════
+# OPENAI
+# ══════════════════════════════════════════════════════════════
+
 def subir_pdf(pdf_bytes: bytes, nombre: str) -> str:
-    response = client.files.create(
-        file=(nombre, pdf_bytes, "application/pdf"),
-        purpose="user_data"
-    )
-    return response.id
+    return client.files.create(
+        file=(nombre, pdf_bytes, "application/pdf"), purpose="user_data"
+    ).id
 
 
 def esperar_procesamiento(file_id: str, intentos: int = 15) -> bool:
     for _ in range(intentos):
-        info = client.files.retrieve(file_id)
-        if info.status == "processed":
+        if client.files.retrieve(file_id).status == "processed":
             return True
         time.sleep(2)
     return False
@@ -1184,68 +527,16 @@ def limpiar_archivos(file_ids: list):
             pass
 
 
-def construir_content(file_ids: list, texto_prompt: str) -> list:
-    content = []
-    for fid in file_ids:
-        content.append({"type": "file", "file": {"file_id": fid}})
-    content.append({"type": "text", "text": texto_prompt})
-    return content
-
-
-def llamada_clasificador(file_ids: list, errores_previos: list = None,
-                         modo: str = "completo") -> dict:
-    """
-    Clasifica el correo y detecta cuántos casos hay. Devuelve estructura multi-caso.
-    En modo "completo" el clasificador NO reparte documentos: solo identifica el tipo
-    y los sujetos. Si se pasan errores_previos, se reinyectan para que corrija.
-    """
-    prompt = cargar_prompt("clasificador")
-
-    if modo in ("completo", "filtrado"):
-        prompt = prompt + (
-            "\n\n===============================================================\n"
-            "INSTRUCCION QUE TIENE PRIORIDAD SOBRE EL REPARTO DE DOCUMENTOS\n"
-            "===============================================================\n"
-            "En esta ejecucion NO debes repartir los documentos entre los casos.\n"
-            "Cada analizador recibira todos los PDFs y decidira por si mismo cuales le\n"
-            "pertenecen, asi que tu unica tarea es identificar:\n"
-            "  - el tipo general del correo\n"
-            "  - la dependencia\n"
-            "  - cuantas PERSONAS DISTINTAS tienen un acto administrativo principal en el correo\n"
-            "  - para cada una: sujeto, identificacion, asunto, subtipo, riesgo y urgencia\n\n"
-            "Cuenta los casos por la cantidad de ACTOS ADMINISTRATIVOS PRINCIPALES de personas\n"
-            "distintas. Los titulos, diplomas y certificados NO generan casos por si solos.\n\n"
-            "Puedes omitir por completo los campos 'indices_documentos', 'documentos' y\n"
-            "'documentos_huerfanos'. Si los incluyes, seran ignorados.\n"
-        )
-
-    if errores_previos:
-        correccion = (
-            "\n\n===============================================================\n"
-            "CORRECCION OBLIGATORIA DE TU INTENTO ANTERIOR\n"
-            "===============================================================\n"
-            f"Recibiste exactamente {len(file_ids)} PDFs. "
-            f"Los unicos indices validos son de 0 a {len(file_ids) - 1}.\n\n"
-            "Tu clasificacion anterior tuvo estos errores:\n\n"
-            + "\n".join(f"- {e}" for e in errores_previos)
-            + "\n\nVuelve a hacer el INVENTARIO documento por documento leyendo el nombre "
-              "y la cedula de cada PDF, y corrige estos errores. Ejecuta las 6 verificaciones "
-              "de la Etapa 4 antes de responder.\n"
-        )
-        prompt = prompt + correccion
-
-    content = construir_content(file_ids, prompt)
-
+def _completar(prompt_content) -> str:
     response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": content}],
+        model=MODEL, messages=[{"role": "user", "content": prompt_content}]
     )
+    return response.choices[0].message.content
 
-    texto = response.choices[0].message.content.strip()
 
+def _parsear_json(texto: str):
     if "```" in texto:
-        partes = texto.split("```")
-        for p in partes:
+        for p in texto.split("```"):
             p = p.strip()
             if p.startswith("json"):
                 p = p[4:].strip()
@@ -1253,637 +544,360 @@ def llamada_clasificador(file_ids: list, errores_previos: list = None,
                 return json.loads(p)
             except Exception:
                 continue
+    return json.loads(texto)
 
+
+# ── Clasificador ───────────────────────────────────────────────
+
+def validar_clasificacion(clasificacion: dict) -> list:
+    errores = []
+    casos = clasificacion.get("casos", []) or []
+    if not casos:
+        return ["No devolviste ningun caso. Debe haber al menos uno."]
+
+    vistos = set()
+    for k, caso in enumerate(casos, start=1):
+        sujeto = (caso.get("sujeto") or "").strip().upper()
+        ident  = str(caso.get("identificacion") or "").strip()
+        if not sujeto:
+            errores.append(f"El caso numero {k} no tiene 'sujeto'.")
+            continue
+        if (sujeto, ident) in vistos:
+            errores.append(f"El sujeto '{sujeto}' aparece en mas de un caso.")
+        vistos.add((sujeto, ident))
+
+    if clasificacion.get("cantidad_casos") not in (None, len(casos)):
+        errores.append(f"cantidad_casos no coincide con el numero de casos ({len(casos)}).")
+    return errores
+
+
+def llamada_clasificador(file_ids: list, errores_previos: list = None) -> dict:
+    prompt = cargar_prompt("clasificador") + (
+        "\n\n===============================================================\n"
+        "NO REPARTAS DOCUMENTOS ENTRE LOS CASOS\n"
+        "===============================================================\n"
+        "Identifica el tipo, la dependencia y cuantas PERSONAS o INSTITUCIONES distintas "
+        "tienen un acto administrativo principal. Para cada una: sujeto, identificacion, "
+        "asunto, subtipo, riesgo y urgencia. Los titulos y certificados NO generan casos "
+        "por si solos. Puedes omitir 'indices_documentos' y 'documentos'.\n"
+    )
+    if errores_previos:
+        prompt += ("\n\nCORRIGE TU INTENTO ANTERIOR:\n"
+                   + "\n".join(f"- {e}" for e in errores_previos) + "\n")
+
+    texto = _completar(construir_content(file_ids, prompt)).strip()
     try:
-        return json.loads(texto)
+        return _parsear_json(texto)
     except Exception:
-        print(f"[WARN] No se pudo parsear clasificación: {texto[:500]}")
-        return {
-            "tipo": "OTRO",
-            "dependencia": "DESCONOCIDO",
-            "cantidad_casos": 1,
-            "casos": [{
-                "sujeto": None,
-                "identificacion": None,
-                "asunto": "No identificado",
-                "radicado": None,
-                "vencimiento": None,
-                "riesgo": "MEDIO",
-                "urgente": False,
-                "subtipo": None,
-                "indices_documentos": list(range(len(file_ids))),
-                "documentos": []
-            }],
-            "documentos_huerfanos": []
-        }
+        print(f"[WARN] No se pudo parsear la clasificación: {texto[:400]}")
+        return {"tipo": "OTRO", "dependencia": "DESCONOCIDO", "cantidad_casos": 1,
+                "casos": [{"sujeto": None, "identificacion": None, "asunto": "No identificado",
+                           "riesgo": "MEDIO", "urgente": False, "subtipo": None}]}
 
 
-def llamada_analizador(file_ids_caso: list, tipo: str, caso: dict, tipo_general: str,
-                       dependencia: str, otros_sujetos: list = None,
-                       modo: str = "completo", errores_previos: list = None) -> str:
-    """
-    Analiza UN caso específico.
-    En modo "completo", file_ids_caso son TODOS los PDFs del correo y el analizador
-    determina por sí mismo cuáles pertenecen al sujeto mediante la matriz de procedencia.
-    Si se pasan errores_previos (solo ocurre para ESCALAFON, ver validar_analisis_escalafon),
-    se reinyectan al modelo para que corrija su intento anterior.
-    """
-    nombre_prompt = MAPA_PROMPTS.get(tipo, "general")
-    prompt = cargar_prompt(nombre_prompt)
+# ── Procedencia (asignación por cédula) ────────────────────────
 
-    docs = caso.get('documentos', [])
-    docs_texto = "\n".join(
-        f"  - {d.get('nombre','?')} -> {d.get('rol','desconocido')}"
-        for d in docs
-    ) if docs else "  No se identificaron documentos individuales"
+def _procedencia_de_un_pdf(file_id: str, indice: int) -> dict:
+    prompt = cargar_prompt("procedencia")
+    base = {"indice": indice, "documento": "documento no identificado", "titular": None,
+            "cedula": None, "dato_clave": "no identificado", "legible": False}
+    try:
+        datos = _parsear_json(_completar(construir_content([file_id], prompt)).strip())
+        cedula = _normalizar_cedula(datos.get("cedula"))
+        base.update({
+            "documento":  datos.get("documento") or base["documento"],
+            "titular":    datos.get("titular"),
+            "cedula":     cedula,
+            "dato_clave": datos.get("dato_clave") or base["dato_clave"],
+            "legible":    bool(datos.get("legible")) and bool(cedula),
+        })
+    except Exception as e:
+        print(f"  [WARN] No se pudo inventariar el PDF #{indice}: {e}")
+    return base
 
-    subtipo = caso.get("subtipo")
-    subtipo_linea = f"Subtipo (detectado por el clasificador): {subtipo}\n" if subtipo else ""
 
-    sujeto_caso = caso.get('sujeto') or 'este docente/ciudadano'
-    ident_caso  = caso.get('identificacion') or 'sin identificacion'
+def inventariar_procedencia(file_ids: list) -> list:
+    resultados = [None] * len(file_ids)
+    hilos = []
 
-    if modo == "filtrado":
-        bloque_procedencia = (
-            f"[EXPEDIENTE YA FILTRADO - LEE ESTO PRIMERO]\n"
-            f"El titular de este expediente es: {sujeto_caso}, cedula {ident_caso}.\n"
-            f"Los PDFs que recibes fueron seleccionados automaticamente comparando la cedula "
-            f"leida en cada documento contra la cedula de este docente. En principio TODOS "
-            f"pertenecen a {sujeto_caso}.\n"
-            f"Aun asi, completa la matriz de procedencia como control: lee el nombre y la cedula "
-            f"dentro de cada PDF y confirma que corresponden. Lo normal es que todas las filas "
-            f"digan SI.\n"
-            f"Si encontraras un documento a nombre de otra persona, marcalo NO, no lo uses, y "
-            f"reportalo en riesgos con nivel ALTO: seria una falla del filtro previo.\n"
-            f"Si falta algun soporte, repórtalo como faltante con normalidad: los documentos que "
-            f"no se pudieron asignar con certeza quedaron apartados a proposito.\n\n"
-        )
-    elif modo == "completo":
-        if otros_sujetos:
-            lista_otros = "\n".join(f"  - {s}" for s in otros_sujetos)
-            bloque_otros = (
-                f"Este correo contiene expedientes de MAS DE UNA persona. Ademas del titular de "
-                f"este expediente, en el correo aparecen:\n{lista_otros}\n"
-                f"Los documentos que pertenezcan a esas otras personas NO son parte de este "
-                f"expediente y no debes usarlos.\n\n"
-            )
+    def trabajo(idx, fid):
+        resultados[idx] = _procedencia_de_un_pdf(fid, idx)
+
+    for idx, fid in enumerate(file_ids):
+        t = threading.Thread(target=trabajo, args=(idx, fid), daemon=True)
+        t.start()
+        hilos.append(t)
+    for t in hilos:
+        t.join(timeout=180)
+
+    for idx in range(len(file_ids)):
+        if resultados[idx] is None:
+            resultados[idx] = {"indice": idx, "documento": "documento no inventariado",
+                               "titular": None, "cedula": None,
+                               "dato_clave": "no identificado", "legible": False}
+    return resultados
+
+
+def asignar_por_cedula(inventario: list, casos: list, total_pdfs: int) -> tuple:
+    cedula_a_caso = {}
+    for c in casos:
+        ced = _normalizar_cedula(c.get("identificacion"))
+        if ced:
+            cedula_a_caso[ced] = (c.get("sujeto"), c.get("identificacion"))
+
+    asignacion = {(c.get("sujeto"), c.get("identificacion")): [] for c in casos}
+    no_asignados = []
+    vistos = set()
+
+    for d in inventario:
+        idx = d.get("indice")
+        if not isinstance(idx, int) or not (0 <= idx < total_pdfs) or idx in vistos:
+            continue
+        vistos.add(idx)
+        ced = _normalizar_cedula(d.get("cedula"))
+        if not d.get("legible") or not ced:
+            no_asignados.append({"indice": idx, "documento": d.get("documento"),
+                                 "razon": "No se pudo leer la cedula del documento."})
+        elif ced not in cedula_a_caso:
+            no_asignados.append({"indice": idx, "documento": d.get("documento"),
+                                 "razon": f"La cedula {ced} no corresponde a ningun expediente del correo."})
         else:
-            bloque_otros = (
-                f"Segun la clasificacion, este correo contiene un solo expediente. Aun asi, "
-                f"verifica el titular de cada documento antes de usarlo.\n\n"
-            )
+            asignacion[cedula_a_caso[ced]].append(idx)
 
-        bloque_procedencia = (
-            f"[ENTREGA DE EXPEDIENTE COMPLETO - LEE ESTO PRIMERO]\n"
-            f"Recibes TODOS los PDFs adjuntos al correo, no solo los de este expediente.\n"
-            f"El titular de ESTE expediente es: {sujeto_caso}, cedula {ident_caso}.\n\n"
-            f"{bloque_otros}"
-            f"Tu primera tarea es determinar, documento por documento, cual pertenece a "
-            f"{sujeto_caso} leyendo el nombre y la cedula que aparecen DENTRO de cada PDF.\n"
-            f"Es NORMAL y ESPERADO que varios de los PDFs pertenezcan a otras personas: eso no "
-            f"es un error del expediente ni un riesgo, es simplemente que el correo trae varios "
-            f"casos juntos. Marcalos con NO en la matriz de procedencia y excluyelos sin "
-            f"reportarlos como riesgo.\n"
-            f"Analiza UNICAMENTE los documentos de {sujeto_caso}.\n\n"
+    for idx in sorted(set(range(total_pdfs)) - vistos):
+        no_asignados.append({"indice": idx, "documento": "documento no inventariado",
+                             "razon": "El inventario no incluyo este PDF."})
+
+    for k in asignacion:
+        asignacion[k] = sorted(asignacion[k])
+    return asignacion, no_asignados
+
+
+# ── Analizador ─────────────────────────────────────────────────
+
+def llamada_analizador(file_ids_caso: list, caso: dict, tipo_general: str,
+                       dependencia: str, filtrado: bool) -> str:
+    prompt = cargar_prompt(MAPA_PROMPTS.get(tipo_general, "general"))
+
+    sujeto = caso.get("sujeto") or "este expediente"
+    ident  = caso.get("identificacion") or "sin identificacion"
+    subtipo = caso.get("subtipo")
+    subtipo_linea = f"Subtipo detectado por el clasificador: {subtipo}\n" if subtipo else ""
+
+    if filtrado:
+        bloque = (
+            f"[EXPEDIENTE YA FILTRADO]\n"
+            f"El titular de este expediente es: {sujeto}, identificacion {ident}.\n"
+            f"Los PDFs que recibes fueron seleccionados comparando la cedula leida en cada "
+            f"documento con la de este expediente, asi que en principio todos le pertenecen. "
+            f"Aun asi, confirma en la matriz de procedencia el nombre y la cedula de cada uno. "
+            f"Si falta un soporte, repórtalo como faltante con normalidad.\n\n"
         )
     else:
-        bloque_procedencia = (
-            f"[VERIFICACION OBLIGATORIA DE PROCEDENCIA]\n"
-            f"El titular de este expediente es: {sujeto_caso}, cedula {ident_caso}.\n"
-            f"Los PDFs adjuntos fueron agrupados automaticamente y ESA AGRUPACION PUEDE CONTENER "
-            f"ERRORES. Antes de usar cualquier documento como soporte, lee dentro de el el nombre "
-            f"y la cedula de su titular y comparalos con los datos de arriba.\n"
-            f"Si un documento esta a nombre de OTRA persona, NO lo uses y reportalo como error de "
-            f"agrupacion documental con nivel de riesgo ALTO.\n\n"
+        bloque = (
+            f"[EXPEDIENTE]\n"
+            f"El titular de este expediente es: {sujeto}, identificacion {ident}.\n"
+            f"Verifica el titular de cada documento y analiza solo lo que pertenezca a este "
+            f"expediente.\n\n"
         )
 
     contexto = (
-        f"[CONTEXTO PREVIO DE CLASIFICACION]\n"
+        f"[CONTEXTO DE CLASIFICACION]\n"
         f"Tipo: {tipo_general}\n"
         f"Dependencia: {dependencia}\n"
         f"{subtipo_linea}"
         f"Asunto: {caso.get('asunto', 'N/A')}\n"
-        f"Sujeto: {sujeto_caso}\n"
-        f"Identificación: {ident_caso}\n"
-        f"Radicado: {caso.get('radicado', 'No identificado')}\n"
-        f"Vencimiento: {caso.get('vencimiento', 'No identificado')}\n"
-        f"Riesgo: {caso.get('riesgo', 'MEDIO')}\n"
-        f"Urgente: {caso.get('urgente', False)}\n"
-        f"Documentos de este caso:\n{docs_texto}\n\n"
-        f"{bloque_procedencia}"
-        f"IMPORTANTE: Analiza SOLO el caso de {sujeto_caso}. "
-        f"El subtipo indicado arriba (si aplica) es una detección preliminar del clasificador: "
-        f"verifícalo tú mismo contra la parte resolutiva del acto antes de darlo por definitivo.\n\n"
+        f"Sujeto: {sujeto}\n"
+        f"Identificacion: {ident}\n\n"
+        f"{bloque}"
     )
-
-    prompt_final = contexto + prompt
-
-    if errores_previos:
-        prompt_final += (
-            "\n\n===============================================================\n"
-            "CORRECCION OBLIGATORIA DE TU INTENTO ANTERIOR\n"
-            "===============================================================\n"
-            "Tu analisis anterior de este mismo expediente tuvo estos problemas de integridad "
-            "documental, detectados automaticamente comparando tu propia matriz de procedencia "
-            "contra el resto de tu respuesta:\n\n"
-            + "\n".join(f"- {e}" for e in errores_previos)
-            + "\n\nVuelve a hacer el analisis completo desde la matriz de procedencia. Antes de "
-              "escribir cada matriz posterior, verifica que cada dato que uses provenga de un "
-              "documento marcado SI. No repitas el mismo error.\n"
-        )
-
-    content = construir_content(file_ids_caso, prompt_final)
-
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": content}],
-    )
-
-    return response.choices[0].message.content
+    return _completar(construir_content(file_ids_caso, contexto + prompt))
 
 
-def extraer_veredicto(texto: str) -> str:
-    APROBADOS    = {"VEREDICTO: APROBADO"}
-    DESAPROBADOS = {"VEREDICTO: DESAPROBADO", "VEREDICTO: REQUIERE_REVISION"}
+# ── Advertencia ────────────────────────────────────────────────
 
-    for linea in texto.strip().split("\n"):
-        linea_norm = linea.strip().upper()
-        if linea_norm in APROBADOS:
-            return "APROBADO"
-        if linea_norm in DESAPROBADOS:
-            return "DESAPROBADO"
-
-    texto_upper = texto.upper()
-    if "VEREDICTO: APROBADO" in texto_upper:
-        return "APROBADO"
-    if "VEREDICTO: DESAPROBADO" in texto_upper or "VEREDICTO: REQUIERE_REVISION" in texto_upper:
-        return "DESAPROBADO"
-
-    print(f"[WARN] No se encontró veredicto explícito.")
-    return "DESAPROBADO"
-
-
-def limpiar_texto(texto: str) -> str:
-    """Quita tildes y caracteres especiales para nombres de archivo."""
-    if not texto:
-        return ""
-    texto = unicodedata.normalize('NFD', texto)
-    texto = "".join(c for c in texto if unicodedata.category(c) != 'Mn')
-    texto = re.sub(r'[<>:"/\\|?*]', '', texto)
-    texto = re.sub(r'\s+', ' ', texto)
-    return texto.strip()
-
-
-def construir_nombre_archivo(caso: dict, tipo: str, message_id: str) -> str:
-    """Formato: SUJETO - IDENTIFICACION - TIPO - YYYY-MM-DD"""
+def construir_advertencia(huerfanos: list, message_id: str) -> dict:
     fecha = datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
-    sujeto = limpiar_texto(caso.get("sujeto") or "")
-    identificacion = limpiar_texto(caso.get("identificacion") or "")
-
-    if sujeto and identificacion:
-        nombre = f"{sujeto} - {identificacion} - {tipo} - {fecha}"
-    elif sujeto:
-        nombre = f"{sujeto} - {tipo} - {fecha}"
-    else:
-        asunto = limpiar_texto(caso.get("asunto") or "Sin asunto")[:60]
-        sufijo = message_id[-8:] if message_id else "sinid"
-        nombre = f"{asunto} - {tipo} - {fecha} - {sufijo}"
-
-    if len(nombre) > 180:
-        nombre = nombre[:180]
-    return nombre
-
-
-def construir_advertencia_huerfanos(huerfanos: list, message_id: str) -> dict:
-    """Genera un archivo de advertencia con los PDFs no emparejados."""
-    fecha = datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
-
-    contenido = "DOCUMENTOS NO EMPAREJADOS\n\n"
-    contenido += f"Correo de origen: {message_id}\n"
-    contenido += f"Fecha de procesamiento: {fecha}\n\n"
-    contenido += f"Se detectaron {len(huerfanos)} documento(s) que no pudieron asociarse a ningún caso.\n\n"
-
-    contenido += "DETALLE\n\n"
+    contenido = ("DOCUMENTOS NO ASOCIADOS A NINGUN EXPEDIENTE\n\n"
+                 f"Correo de origen: {message_id}\n"
+                 f"Fecha de procesamiento: {fecha}\n\n"
+                 f"Se detectaron {len(huerfanos)} documento(s) sin asociar.\n\n"
+                 "DETALLE\n\n")
     for h in huerfanos:
-        contenido += f"- {h.get('nombre', 'Documento sin nombre')} — Razón: {h.get('razon', 'No especificada')}\n"
+        contenido += f"- {h.get('nombre', h.get('documento', 'Documento'))} — {h.get('razon', 'Sin razon')}\n"
+    contenido += ("\nACCION\n\n"
+                  "- Revisar el correo original y verificar que correspondan a un caso.\n"
+                  "- Reenviar el expediente si faltan documentos principales.\n")
 
-    contenido += "\nRECOMENDACION\n\n"
-    contenido += "- Revisar el correo original y verificar que los soportes correspondan a un caso identificable.\n"
-    contenido += "- Reenviar el expediente completo si faltan documentos principales.\n"
-
-    meta = {
-        "sujeto":        "Advertencia del sistema",
-        "asunto":        "Documentos que no pudieron asociarse a ningún caso",
-        "tipo":          "ADVERTENCIA",
-        "veredicto":     "ADVERTENCIA",
-        "fecha":         fecha,
-    }
-
+    meta = {"sujeto": "Advertencia del sistema", "tipo": "ADVERTENCIA",
+            "asunto": "Documentos sin asociar", "concepto_sugerido": "sin_concepto", "fecha": fecha}
     return {
-        "tipo":            "ADVERTENCIA",
-        "carpeta":         "ADVERTENCIA",
-        "nombre_archivo":  f"ADVERTENCIA - {message_id[-8:]} - {fecha}",
-        "sujeto":          None,
-        "identificacion":  None,
-        "veredicto":       "ADVERTENCIA",
-        "analisis":        renderizar_analisis(contenido, meta),
-        "analisis_texto":  contenido,
-        "message_id":      message_id,
-        "cantidad_huerfanos": len(huerfanos)
+        "tipo": "ADVERTENCIA", "carpeta": "ADVERTENCIA",
+        "nombre_archivo": f"ADVERTENCIA - {message_id[-8:]} - {fecha}",
+        "sujeto": None, "identificacion": None, "subtipo": None,
+        "concepto_sugerido": "sin_concepto",
+        "analisis": renderizar_analisis(contenido, meta),
+        "analisis_texto": contenido, "message_id": message_id,
     }
 
+
+# ══════════════════════════════════════════════════════════════
+# PROCESAMIENTO
+# ══════════════════════════════════════════════════════════════
 
 def limpiar_pendientes_vencidos():
     ahora = time.time()
     with lock_pendientes:
-        vencidos = [
-            mid for mid, datos in pendientes.items()
-            if ahora - datos["timestamp"] > TTL_SEGUNDOS
-        ]
-        for mid in vencidos:
+        for mid in [m for m, d in pendientes.items() if ahora - d["timestamp"] > TTL_SEGUNDOS]:
             print(f"[WARN] Descartando correo vencido: {mid}")
             del pendientes[mid]
 
 
 def procesar_correo(message_id: str, archivos_datos: list) -> dict:
-    """
-    Procesa un correo completo con posiblemente varios casos.
-    Devuelve un dict con 'resultados' que es lista de todos los análisis + advertencia si aplica.
-    """
     file_ids = []
     try:
-        # Subir todos los PDFs
         for archivo in archivos_datos:
             print(f"Subiendo {archivo['nombre']}...")
-            fid = subir_pdf(archivo["bytes"], archivo["nombre"])
-            file_ids.append(fid)
-            print(f"  → {fid}")
+            file_ids.append(subir_pdf(archivo["bytes"], archivo["nombre"]))
 
-        # Esperar procesamiento
-        print("Esperando procesamiento de archivos...")
+        print("Esperando procesamiento...")
         for fid in file_ids:
             if not esperar_procesamiento(fid):
                 raise Exception(f"Timeout esperando procesamiento de {fid}")
 
-        # Determinar el modo de entrega de PDFs al analizador
         total_pdfs = len(file_ids)
-        modo = MODO_ENTREGA
-        if modo in ("completo", "filtrado") and total_pdfs > LIMITE_PDFS_MODO_COMPLETO:
-            modo = "subconjunto"
-            print(f"  [INFO] {total_pdfs} PDFs superan el limite de {LIMITE_PDFS_MODO_COMPLETO}; "
-                  f"se usa modo subconjunto para controlar costo y tiempo.")
-        print(f"Modo de entrega solicitado: {modo}")
 
-        # LLAMADA 1: Clasificar y detectar casos (con reintento automático)
-        print("Clasificando documentos...")
-        clasificacion = None
-        errores = []
-
+        # 1) CLASIFICAR
+        print("Clasificando...")
+        clasificacion, errores = None, []
         for intento in range(1, MAX_INTENTOS_CLASIFICACION + 1):
-            clasificacion = llamada_clasificador(file_ids, errores_previos=errores, modo=modo)
-            errores = validar_clasificacion(clasificacion, total_pdfs, modo=modo)
-
+            clasificacion = llamada_clasificador(file_ids, errores_previos=errores)
+            errores = validar_clasificacion(clasificacion)
             if not errores:
-                if intento > 1:
-                    print(f"  [OK] Clasificación corregida en el intento {intento}")
                 break
+            print(f"  [WARN] Intento {intento}: {errores}")
 
-            print(f"  [WARN] Intento {intento}/{MAX_INTENTOS_CLASIFICACION} con errores:")
-            for e in errores:
-                print(f"         - {e}")
+        tipo_general = clasificacion.get("tipo", "OTRO").strip().upper()
+        dependencia  = (clasificacion.get("dependencia") or "DESCONOCIDO").strip().upper()
+        casos = [c for c in clasificacion.get("casos", []) if (c.get("sujeto") or "").strip()]
+        huerfanos = list(clasificacion.get("documentos_huerfanos", []) or [])
 
-            if intento == MAX_INTENTOS_CLASIFICACION:
-                print(f"  [ERROR] Clasificación sigue con errores tras {intento} intentos. "
-                      f"Se aplicará corrección defensiva.")
+        unicos = {}
+        for c in casos:
+            unicos.setdefault((c.get("sujeto"), c.get("identificacion")), c)
+        casos = list(unicos.values())
 
-        clasificacion_con_errores = list(errores)
-        tipo_general  = clasificacion.get("tipo", "OTRO").strip().upper()
-        dependencia   = (clasificacion.get("dependencia") or "DESCONOCIDO").strip().upper()
-        casos         = clasificacion.get("casos", [])
-        huerfanos     = clasificacion.get("documentos_huerfanos", [])
+        print(f"Tipo: {tipo_general} | Casos: {len(casos)}")
 
-        # ── VALIDACIÓN DEFENSIVA ─────────────────────────────
-        # 1. Filtrar índices fuera de rango (solo relevante en modo subconjunto)
-        if modo == "subconjunto":
-            for caso in casos:
-                indices_originales = caso.get("indices_documentos", [])
-                indices_validos = [
-                    i for i in indices_originales
-                    if isinstance(i, int) and 0 <= i < total_pdfs
-                ]
-                if len(indices_validos) != len(indices_originales):
-                    print(f"  [WARN] Corrigiendo índices fuera de rango en caso "
-                          f"'{caso.get('sujeto')}': {indices_originales} → {indices_validos}")
-                caso["indices_documentos"] = indices_validos
+        # 2) ¿SE FILTRA POR CÉDULA?
+        filtrar = (
+            MODO_ENTREGA == "filtrado"
+            and tipo_general not in TIPOS_CON_SOPORTES_DE_TERCEROS
+            and len(casos) >= 2
+            and total_pdfs <= LIMITE_PDFS_FILTRADO
+        )
 
-        # 2. Deduplicar casos con mismo sujeto+identificación
-        casos_unicos = {}
-        for caso in casos:
-            clave = (caso.get("sujeto"), caso.get("identificacion"))
-            if clave in casos_unicos:
-                existentes = set(casos_unicos[clave].get("indices_documentos") or [])
-                nuevos     = set(caso.get("indices_documentos") or [])
-                casos_unicos[clave]["indices_documentos"] = sorted(existentes | nuevos)
-                print(f"  [WARN] Fusionando caso duplicado de '{caso.get('sujeto')}'")
-            else:
-                casos_unicos[clave] = caso
-        casos = list(casos_unicos.values())
-
-        # 3. En modo subconjunto, descartar casos sin documentos asignados.
-        #    En modo completo todos los casos reciben el expediente entero.
-        if modo == "subconjunto":
-            casos = [c for c in casos if c.get("indices_documentos")]
-        else:
-            casos = [c for c in casos if (c.get("sujeto") or "").strip()]
-
-        print(f"Tipo general: {tipo_general} | Casos detectados: {len(casos)} | Huérfanos: {len(huerfanos)}")
-
-        # ── ALCANCE DEL MODO FILTRADO ────────────────────────────
-        # El filtrado asigna documentos comparando la CEDULA leida en cada PDF
-        # con la del expediente. Eso solo es correcto cuando todos los soportes
-        # estan a nombre del propio titular, que es el caso de ESCALAFON.
-        #
-        # Se excluye deliberadamente:
-        #  - Tipos donde un soporte legitimo lleva la identificacion de un
-        #    TERCERO: IVC (el sujeto es una institucion con NIT, pero los
-        #    soportes traen cedulas de representantes legales) y CESANTIAS de
-        #    remodelacion (la cedula del contratista pertenece al caso del
-        #    docente). Filtrar por cedula ahi apartaria soportes validos.
-        #  - Correos con un solo caso: sin un segundo expediente en el lote no
-        #    existe riesgo de contaminacion, asi que la llamada extra no aporta
-        #    nada y se ahorra.
-        TIPOS_CON_SOPORTES_DE_TERCEROS = {"IVC", "CESANTIAS"}
-        if modo == "filtrado":
-            if tipo_general in TIPOS_CON_SOPORTES_DE_TERCEROS:
-                modo = "completo"
-                print(f"  [INFO] {tipo_general} admite soportes a nombre de terceros; "
-                      f"se usa modo completo para no apartarlos.")
-            elif len(casos) < 2:
-                modo = "completo"
-                print(f"  [INFO] Un solo expediente en el correo: sin riesgo de "
-                      f"contaminacion, se omite la llamada de procedencia.")
-        print(f"Modo de entrega efectivo: {modo}")
-
-        # ── PROCEDENCIA PREVIA (modo "filtrado") ─────────────────
-        # Inventaria los PDFs y los reparte por coincidencia exacta de cédula.
-        asignacion_filtrada = {}
-        docs_no_asignados = []
-        if modo == "filtrado":
-            print(f"Inventariando procedencia de {total_pdfs} documentos "
-                  f"(una llamada por PDF, en paralelo)...")
-            inventario = llamada_procedencia(file_ids)
-            for d in inventario.get("documentos", []):
-                estado = d.get("cedula") if d.get("legible") else "ILEGIBLE"
+        asignacion = {}
+        if filtrar:
+            print(f"Inventariando procedencia de {total_pdfs} PDFs (uno por llamada)...")
+            inventario = inventariar_procedencia(file_ids)
+            for d in inventario:
                 print(f"  PDF #{d['indice']}: {d.get('documento')} | "
-                      f"{d.get('titular') or 'sin titular'} | {estado}")
-
-            asignacion_filtrada, docs_no_asignados = asignar_documentos_por_cedula(
-                inventario, casos, total_pdfs
-            )
-
+                      f"{d.get('titular') or 'sin titular'} | "
+                      f"{d.get('cedula') if d.get('legible') else 'ILEGIBLE'}")
+            asignacion, no_asignados = asignar_por_cedula(inventario, casos, total_pdfs)
             for c in casos:
                 clave = (c.get("sujeto"), c.get("identificacion"))
-                n = len(asignacion_filtrada.get(clave, []))
-                print(f"  {c.get('sujeto')}: {n} documento(s) asignado(s) por cedula")
-            if docs_no_asignados:
-                print(f"  [!] {len(docs_no_asignados)} documento(s) sin asignar "
-                      f"(quedan apartados para revision humana)")
-                for d in docs_no_asignados:
-                    print(f"      - indice {d['indice']}: {d['documento']} | {d['razon']}")
+                print(f"  {c.get('sujeto')}: {len(asignacion.get(clave, []))} documento(s)")
+            huerfanos += [{"nombre": f"{d['documento']} (PDF #{d['indice']+1})", "razon": d["razon"]}
+                          for d in no_asignados]
 
-            # Los no asignados se reportan junto con los huérfanos del clasificador
-            huerfanos = list(huerfanos) + [
-                {"nombre": f"{d['documento']} (PDF #{d['indice'] + 1})", "razon": d["razon"]}
-                for d in docs_no_asignados
-            ]
-
+        # 3) ANALIZAR
         resultados = []
         fecha_hoy = datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")
 
-        # LLAMADA 2..N: Analizar cada caso por separado
         for i, caso in enumerate(casos, start=1):
-            sujeto = caso.get('sujeto', 'sin_nombre')
-            print(f"[{i}/{len(casos)}] Analizando caso de: {sujeto}")
+            sujeto = caso.get("sujeto", "sin_nombre")
+            print(f"[{i}/{len(casos)}] Analizando: {sujeto}")
 
-            # Determinar qué PDFs recibe el analizador
-            if modo == "filtrado":
-                clave_caso = (caso.get("sujeto"), caso.get("identificacion"))
-                indices_caso = asignacion_filtrada.get(clave_caso, [])
-                file_ids_caso = [file_ids[i] for i in indices_caso]
-                otros_sujetos = []
-                print(f"  Recibe solo sus documentos: {len(file_ids_caso)} PDF(s) "
-                      f"(indices {indices_caso})")
-            elif modo == "completo":
-                file_ids_caso = file_ids
-                otros_sujetos = [
-                    f"{(c.get('sujeto') or '').strip()} (cedula {c.get('identificacion') or 'no indicada'})"
-                    for c in casos
-                    if (c.get("sujeto"), c.get("identificacion")) != (caso.get("sujeto"), caso.get("identificacion"))
-                    and (c.get("sujeto") or "").strip()
-                ]
-                print(f"  Recibe el expediente completo: {len(file_ids_caso)} PDFs "
-                      f"| Otros sujetos en el correo: {len(otros_sujetos)}")
+            if filtrar:
+                indices = asignacion.get((caso.get("sujeto"), caso.get("identificacion")), [])
+                file_ids_caso = [file_ids[k] for k in indices]
+                print(f"  Recibe {len(file_ids_caso)} PDF(s): {indices}")
             else:
-                indices = caso.get("indices_documentos", [])
-                print(f"  Indices del clasificador: {indices} (total PDFs: {len(file_ids)})")
-                file_ids_caso = [file_ids[idx] for idx in indices if 0 <= idx < len(file_ids)]
-                otros_sujetos = []
-                print(f"  PDFs asignados a este caso: {len(file_ids_caso)}")
+                file_ids_caso = file_ids
+                print(f"  Recibe el expediente completo: {len(file_ids_caso)} PDF(s)")
 
             if not file_ids_caso:
-                # Red de seguridad: en modo "filtrado" un caso puede quedarse sin
-                # documentos si no se pudo leer la cedula de ninguno de sus PDFs.
-                # NUNCA se descarta en silencio: se genera igual un archivo para que
-                # el expediente exista en Dropbox y el abogado sepa que hay que
-                # revisarlo a mano. Un caso que desaparece es peor que uno marcado.
-                print(f"  [WARN] Caso sin documentos asignados: {sujeto}. "
-                      f"Se genera archivo de revision manual.")
-                texto_sin_docs = (
-                    "1. RESUMEN DEL EXPEDIENTE\n\n"
+                print(f"  [WARN] Sin documentos asignados. Se genera archivo de revision manual.")
+                texto = (
+                    f"1. RESUMEN DEL EXPEDIENTE\n\n"
                     f"Expediente de {sujeto}, identificacion {caso.get('identificacion') or 'no indicada'}.\n\n"
-                    "NO FUE POSIBLE ASIGNAR DOCUMENTOS A ESTE EXPEDIENTE\n\n"
-                    "El sistema identifico este caso en el correo, pero no pudo asociar con "
-                    "certeza ninguno de los PDFs adjuntos a esta persona. Esto ocurre cuando la "
-                    "cedula no se logra leer dentro de los documentos, o cuando la cedula leida "
-                    "no coincide con la del expediente.\n\n"
-                    "Por criterio de seguridad, el sistema prefiere no asignar documentos antes "
-                    "que asignarlos por suposicion: un soporte mal atribuido contaminaria el "
-                    "analisis de otra persona.\n\n"
+                    "NO FUE POSIBLE ASOCIAR DOCUMENTOS A ESTE EXPEDIENTE\n\n"
+                    "El sistema identifico el caso pero no pudo asociar con certeza ninguno de los "
+                    "PDFs. Ocurre cuando no se logra leer la cedula, o cuando no coincide con la del "
+                    "expediente. Por seguridad, el sistema prefiere no asignar antes que asignar por "
+                    "suposicion.\n\n"
                     "2. ACCION REQUERIDA\n\n"
                     "- Revisar manualmente los documentos del correo original.\n"
-                    "- Verificar que los soportes de este docente esten efectivamente adjuntos.\n"
-                    "- Revisar el archivo de ADVERTENCIA de este mismo correo, donde se listan "
-                    "los documentos que quedaron sin asignar.\n\n"
-                    "VEREDICTO: DESAPROBADO"
+                    "- Verificar que los soportes de este expediente esten adjuntos.\n"
+                    "- Revisar el archivo de ADVERTENCIA de este correo.\n\n"
+                    "conclusion_juridica: requiere_validacion_manual"
                 )
-                meta_sin = {
-                    "sujeto": caso.get("sujeto"),
-                    "identificacion": caso.get("identificacion"),
-                    "tipo": tipo_general,
-                    "subtipo": caso.get("subtipo"),
-                    "asunto": (caso.get("asunto") or "").strip(),
-                    "riesgo": "ALTO",
-                    "veredicto": "DESAPROBADO",
-                    "fecha": fecha_hoy,
-                }
-                resultados.append({
-                    "tipo":            tipo_general,
-                    "dependencia":     dependencia,
-                    "subtipo":         caso.get("subtipo"),
-                    "asunto":          (caso.get("asunto") or "").strip(),
-                    "sujeto":          caso.get("sujeto"),
-                    "identificacion":  caso.get("identificacion"),
-                    "radicado":        caso.get("radicado"),
-                    "vencimiento":     caso.get("vencimiento"),
-                    "riesgo":          "ALTO",
-                    "urgente":         caso.get("urgente", False),
-                    "veredicto":       "DESAPROBADO",
-                    "carpeta":         MAPA_CARPETAS.get((tipo_general, "DESAPROBADO"), "OTRO"),
-                    "nombre_archivo":  construir_nombre_archivo(caso, tipo_general, message_id),
-                    "analisis":        renderizar_analisis(texto_sin_docs, meta_sin),
-                    "analisis_texto":  texto_sin_docs,
-                    "integridad_documental_ok": False,
-                    "errores_integridad": ["No se pudo asignar ningun documento a este expediente."],
-                    "avisos_inventario": [],
-                    "message_id":      message_id
-                })
-                continue
-
-            # Ejecutar análisis. Para ESCALAFON se audita en código la integridad
-            # documental de la propia respuesta (ver validar_analisis_escalafon) y se
-            # reintenta si se detecta contaminación entre expedientes. El resto de
-            # módulos sigue exactamente el flujo anterior, sin cambios de comportamiento.
-            bloqueantes = []
-            advertencias = []
-            intentos_permitidos = MAX_INTENTOS_ANALISIS_ESCALAFON if tipo_general == "ESCALAFON" else 1
-
-            for intento_an in range(1, intentos_permitidos + 1):
-                analisis = llamada_analizador(
-                    file_ids_caso, tipo_general, caso, tipo_general, dependencia,
-                    otros_sujetos=otros_sujetos, modo=modo,
-                    errores_previos=(bloqueantes + advertencias)
-                )
-
-                if tipo_general != "ESCALAFON":
-                    bloqueantes, advertencias = [], []
-                    break
-
-                bloqueantes, advertencias = validar_analisis_escalafon(
-                    analisis, caso, total_pdfs_enviados=len(file_ids_caso)
-                )
-
-                if advertencias:
-                    for a in advertencias:
-                        print(f"  [AVISO] {a}")
-
-                if not bloqueantes:
-                    if intento_an > 1:
-                        print(f"  [OK] Analisis corregido en el intento {intento_an}")
-                    break
-
-                print(f"  [WARN] Intento {intento_an}/{intentos_permitidos} de analisis "
-                      f"con contaminacion documental:")
-                for e in bloqueantes:
-                    print(f"         - {e}")
-
-            integridad_ok = not bloqueantes
-
-            if integridad_ok:
-                veredicto = extraer_veredicto(analisis)
+                concepto = "requiere_validacion_manual"
             else:
-                # Fail-closed: tras agotar los reintentos, la contaminacion sigue sin
-                # resolverse. Nunca se deja pasar como APROBADO un analisis que el propio
-                # sistema no pudo verificar libre de datos de otro expediente; se fuerza
-                # a revision manual en vez de confiar en el veredicto que el modelo escribio.
-                print(f"  [ERROR] Contaminacion documental persiste tras {intentos_permitidos} "
-                      f"intento(s). Forzando DESAPROBADO para revision manual.")
-                veredicto = "DESAPROBADO"
-                analisis += (
-                    "\n\nADVERTENCIA DEL SISTEMA: este analisis fue marcado automaticamente como "
-                    "DESAPROBADO porque, tras varios intentos, no fue posible verificar que "
-                    "estuviera libre de datos de otro expediente del mismo correo. Requiere "
-                    "revision manual completa del abogado antes de cualquier decision.\n\n"
-                    "Detalle tecnico para el revisor:\n"
-                    + "\n".join(f"- {e}" for e in bloqueantes)
-                )
+                texto = llamada_analizador(file_ids_caso, caso, tipo_general, dependencia, filtrar)
+                concepto = extraer_concepto_sugerido(texto)
 
-            carpeta   = MAPA_CARPETAS.get((tipo_general, veredicto), "OTRO")
-            nombre    = construir_nombre_archivo(caso, tipo_general, message_id)
+            carpeta = MAPA_CARPETAS.get(tipo_general, "ADVERTENCIA")
+            print(f"  Concepto: {concepto} | Carpeta: {carpeta}")
 
-            print(f"  Veredicto: {veredicto} | Carpeta: {carpeta}"
-                  + ("" if integridad_ok else " | INTEGRIDAD: FALLO (revision manual forzada)")
-                  + (f" | {len(advertencias)} aviso(s) de inventario" if advertencias else ""))
-
-            # ── Metadatos para el encabezado del HTML ──
-            meta_html = {
-                "sujeto":         caso.get("sujeto"),
-                "identificacion": caso.get("identificacion"),
-                "tipo":           tipo_general,
-                "subtipo":        caso.get("subtipo"),
-                "asunto":         (caso.get("asunto") or "").strip(),
-                "riesgo":         (caso.get("riesgo") or "MEDIO").strip().upper(),
-                "veredicto":      veredicto,
-                "fecha":          fecha_hoy,
+            meta = {
+                "sujeto": caso.get("sujeto"), "identificacion": caso.get("identificacion"),
+                "tipo": tipo_general, "subtipo": caso.get("subtipo"),
+                "asunto": (caso.get("asunto") or "").strip(),
+                "riesgo": (caso.get("riesgo") or "MEDIO").strip().upper(),
+                "concepto_sugerido": concepto, "fecha": fecha_hoy,
             }
-
             resultados.append({
-                "tipo":            tipo_general,
-                "dependencia":     dependencia,
-                "subtipo":         caso.get("subtipo"),
-                "asunto":          (caso.get("asunto") or "").strip(),
-                "sujeto":          caso.get("sujeto"),
-                "identificacion":  caso.get("identificacion"),
-                "radicado":        caso.get("radicado"),
-                "vencimiento":     caso.get("vencimiento"),
-                "riesgo":          (caso.get("riesgo") or "MEDIO").strip().upper(),
-                "urgente":         caso.get("urgente", False),
-                "veredicto":       veredicto,
-                "carpeta":         carpeta,
-                "nombre_archivo":  nombre,
-                "analisis":        renderizar_analisis(analisis, meta_html),
-                "analisis_texto":  analisis,
-                "integridad_documental_ok": integridad_ok,
-                "errores_integridad": bloqueantes,
-                "avisos_inventario": advertencias,
-                "message_id":      message_id
+                "tipo": tipo_general, "dependencia": dependencia,
+                "subtipo": caso.get("subtipo"), "asunto": (caso.get("asunto") or "").strip(),
+                "sujeto": caso.get("sujeto"), "identificacion": caso.get("identificacion"),
+                "radicado": caso.get("radicado"), "vencimiento": caso.get("vencimiento"),
+                "riesgo": (caso.get("riesgo") or "MEDIO").strip().upper(),
+                "urgente": caso.get("urgente", False),
+                "concepto_sugerido": concepto, "carpeta": carpeta,
+                "nombre_archivo": construir_nombre_archivo(caso, tipo_general, message_id),
+                "analisis": renderizar_analisis(texto, meta), "analisis_texto": texto,
+                "message_id": message_id,
             })
 
-        # Agregar advertencia si hay huérfanos
         if huerfanos:
-            print(f"[!] Generando advertencia con {len(huerfanos)} documentos huérfanos")
-            resultados.append(construir_advertencia_huerfanos(huerfanos, message_id))
+            print(f"[!] {len(huerfanos)} documento(s) sin asociar → advertencia")
+            resultados.append(construir_advertencia(huerfanos, message_id))
 
         return {
-            "message_id":       message_id,
-            "tipo_general":     tipo_general,
-            "cantidad_casos":   len(casos),
-            "cantidad_huerfanos": len(huerfanos),
-            "archivos_procesados": len(file_ids),
-            "formato_salida":   FORMATO_SALIDA,
-            "modo_entrega":     modo,
-            "clasificacion_ok": len(clasificacion_con_errores) == 0,
-            "clasificacion_errores": clasificacion_con_errores,
-            "resultados":       resultados
+            "message_id": message_id, "tipo_general": tipo_general,
+            "cantidad_casos": len(casos), "cantidad_huerfanos": len(huerfanos),
+            "archivos_procesados": total_pdfs, "formato_salida": FORMATO_SALIDA,
+            "modo_entrega": "filtrado" if filtrar else "completo",
+            "resultados": resultados,
         }
-
     finally:
         limpiar_archivos(file_ids)
 
 
-# ── Endpoints de diagnóstico ───────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# ENDPOINTS
+# ══════════════════════════════════════════════════════════════
 
 @app.route("/version", methods=["GET"])
 def version():
     return jsonify({
-        "version":         BUILD_VERSION,
-        "build_date":      BUILD_DATE,
-        "fix":             BUILD_FIX,
-        "model":           MODEL,
-        "formato_salida":  FORMATO_SALIDA,
-        "modo_entrega":    MODO_ENTREGA,
-        "limite_pdfs_modo_completo": LIMITE_PDFS_MODO_COMPLETO,
-        "max_intentos_analisis_escalafon": MAX_INTENTOS_ANALISIS_ESCALAFON,
-        "status":          "ok"
+        "version": BUILD_VERSION, "build_date": BUILD_DATE, "fix": BUILD_FIX,
+        "model": MODEL, "formato_salida": FORMATO_SALIDA, "modo_entrega": MODO_ENTREGA,
+        "limite_pdfs_filtrado": LIMITE_PDFS_FILTRADO,
+        "modulos_activos": ["ESCALAFON", "IVC"], "status": "ok",
     })
 
 
@@ -1894,106 +908,50 @@ def health():
 
 @app.route("/preview", methods=["GET", "POST"])
 def preview():
-    """
-    Vista previa del diseño HTML sin gastar llamadas a OpenAI.
-    GET  → renderiza un análisis de ejemplo.
-    POST → recibe {"analisis": "...", "meta": {...}} y devuelve el HTML.
-    """
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
-        texto = data.get("analisis", "")
-        meta  = data.get("meta", {})
-        return renderizar_analisis(texto, meta), 200, {"Content-Type": "text/html; charset=utf-8"}
+        return renderizar_analisis(data.get("analisis", ""), data.get("meta", {})), 200, \
+            {"Content-Type": "text/html; charset=utf-8"}
 
-    # AVISO: datos ficticios, usados únicamente para previsualizar el diseño.
-    ejemplo = """1. RESUMEN DEL CASO
+    ejemplo = """1. RESUMEN DEL EXPEDIENTE
 
-Docente: **NOMBRE APELLIDO DE PRUEBA**
-Cédula: **00.000.000**
-Subtipo detectado: **cesantia_parcial_remodelacion_vivienda**
-Inmueble: Calle 00 No. 00-00, Barrio de Prueba, Ciudad
-Valor reconocido en el acto: **$00.000.000**
+Institucion: COLEGIO DE PRUEBA
+NIT: 900000000
+Tramite detectado: cierre del establecimiento educativo
 
 2. SUBTIPO IDENTIFICADO
 
-Se clasifica como remodelación porque los soportes incluyen contrato civil de obra,
-certificado de tradición y documentos del contratista. No hay soportes educativos.
+ivc_cierre — se identifica por la solicitud de cierre y el acta de aviso a la comunidad.
 
-3. MATRIZ DE IDENTIDAD
+3. MATRIZ DE DOCUMENTOS REQUERIDOS
 
-| Campo | En el acto | En la cédula del docente | Resultado |
+| Documento requerido | Caracter | Estado | Observacion |
 |---|---|---|---|
-| Nombre | NOMBRE APELLIDO DE PRUEBA | NOMBRE APELLIDO DE PRUEBA | coincide |
-| Cédula | 00.000.000 | 00.000.000 | coincide |
+| Acta de aviso a la comunidad (6 meses antes) | Obligatorio | aportado | Cumple la antelacion |
+| Registros de evaluacion y promocion | Obligatorio | aportado | Foliados y firmados |
+| Acta del consejo directivo con alumnos | Obligatorio | faltante | No se aporto |
+| Fecha de cierre y mecanismos de culminacion | Obligatorio | aportado | Indicada en la solicitud |
 
-4. MATRIZ DE VALORES
-
-| Concepto | Valor soportado | Valor reconocido | Resultado |
-|---|---|---|---|
-| Valor del contrato de obra | $00.000.000 | $00.000.000 | coincide |
-| Saldo a pagar | $00.000.000 | $00.000.000 | coincide |
-
-5. MATRIZ DE CUENTA BANCARIA
-
-| Titular | Banco | Tipo de cuenta | Número | Coincide con beneficiario | Resultado |
-|---|---|---|---|---|---|
-| NOMBRE APELLIDO DE PRUEBA | Banco de prueba | Cuenta de ahorro | 000-000000-00 | Sí | coincide |
-
-6. MATRIZ INMUEBLE
-
-| Matrícula | Dirección | Titular | Docente es propietario | Resultado |
-|---|---|---|---|---|
-| 000-000000 | Calle 00 No. 00-00 | Antecedentes de dominio de terceros | Sí | coincide_con_validacion_manual |
-
-7. MATRIZ OBRA
-
-| Contratante | Contratista | Objeto | Valor del contrato | Resultado |
-|---|---|---|---|---|
-| NOMBRE APELLIDO DE PRUEBA | CONTRATISTA DE PRUEBA | Remodelación de vivienda | $00.000.000 | coincide |
-
-8. DOCUMENTOS FALTANTES
-
-| Documento | Carácter | Estado |
-|---|---|---|
-| Acto administrativo | Obligatorio | aportado |
-| Cédula del docente | Obligatorio | aportado |
-| Tarjeta profesional del contratista | Complementario | no_aplica |
-| Soporte de parentesco | No aplica al subtipo | no_aplica |
-
-9. RIESGOS DETECTADOS
+4. RIESGOS DETECTADOS
 
 - ALTO: no se detectaron riesgos de nivel alto.
-- MEDIO: el certificado de tradición registra antecedentes de terceros.
-- BAJO: la cédula del contratista está correctamente asociada al contrato.
+- MEDIO: falta el acta del consejo directivo con la relacion de alumnos.
+- BAJO: la documentacion aportada es coherente entre si.
 
-10. RECOMENDACION FINAL
+5. NOTA PARA EL ABOGADO REVISOR
 
-VIABLE CON VALIDACIÓN MANUAL: el expediente está bien estructurado y solo requiere
-confirmar la situación dominial actual del inmueble.
+El expediente esta casi completo. El punto que requiere su criterio es la ausencia del acta del
+consejo directivo con la relacion de alumnos, necesaria para expedir los certificados.
 
-11. NOTA PARA EL ABOGADO REVISOR
+conclusion_juridica: pendiente_por_soportes"""
 
-Documento de demostración generado con datos ficticios. No corresponde a ningún
-expediente real ni a ninguna persona identificable.
+    meta = {"sujeto": "COLEGIO DE PRUEBA", "identificacion": "900000000", "tipo": "IVC",
+            "subtipo": "ivc_cierre", "asunto": "Vista previa del formato — datos ficticios",
+            "riesgo": "MEDIO", "concepto_sugerido": "pendiente_por_soportes",
+            "fecha": datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d")}
+    return envolver_html(analisis_a_html_cuerpo(ejemplo), meta), 200, \
+        {"Content-Type": "text/html; charset=utf-8"}
 
-VEREDICTO: APROBADO"""
-
-    meta = {
-        "sujeto": "NOMBRE APELLIDO DE PRUEBA",
-        "identificacion": "00000000",
-        "tipo": "CESANTIAS",
-        "subtipo": "cesantia_parcial_remodelacion_vivienda",
-        "asunto": "Vista previa del formato — datos ficticios de demostración",
-        "riesgo": "BAJO",
-        "veredicto": "APROBADO",
-        "fecha": datetime.now(TZ_COLOMBIA).strftime("%Y-%m-%d"),
-    }
-    return envolver_html(analisis_a_html_cuerpo(ejemplo), meta), 200, {
-        "Content-Type": "text/html; charset=utf-8"
-    }
-
-
-# ── Endpoint principal ─────────────────────────────────────────
 
 @app.route("/analizar", methods=["POST"])
 def analizar():
@@ -2012,37 +970,27 @@ def analizar():
     with lock_pendientes:
         if message_id not in pendientes:
             pendientes[message_id] = {"archivos": [], "timestamp": time.time()}
-
         for archivo in archivos:
-            pendientes[message_id]["archivos"].append({
-                "bytes":  archivo.read(),
-                "nombre": archivo.filename or "documento.pdf"
-            })
-
+            pendientes[message_id]["archivos"].append(
+                {"bytes": archivo.read(), "nombre": archivo.filename or "documento.pdf"}
+            )
         recibidos = len(pendientes[message_id]["archivos"])
 
-    print(f"[{message_id}] Recibidos {recibidos}/{total_files} archivos")
+    print(f"[{message_id}] Recibidos {recibidos}/{total_files}")
 
     if recibidos < total_files:
-        return jsonify({
-            "status": "acumulando",
-            "recibidos": recibidos,
-            "esperados": total_files,
-            "message_id": message_id
-        }), 202
+        return jsonify({"status": "acumulando", "recibidos": recibidos,
+                        "esperados": total_files, "message_id": message_id}), 202
 
     with lock_pendientes:
-        datos_correo = pendientes.pop(message_id)["archivos"]
+        datos = pendientes.pop(message_id)["archivos"]
 
     try:
-        resultado = procesar_correo(message_id, datos_correo)
-        return jsonify(resultado), 200
+        return jsonify(procesar_correo(message_id, datos)), 200
     except Exception as e:
-        print(f"Error procesando {message_id}: {str(e)}")
+        print(f"Error procesando {message_id}: {e}")
         return jsonify({"error": str(e), "message_id": message_id}), 500
 
-
-# ── Arranque local ─────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

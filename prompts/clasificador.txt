@@ -8,20 +8,22 @@ ETAPA 1 — INVENTARIO OBLIGATORIO (antes de agrupar nada)
 
 Antes de intentar cualquier agrupación debes recorrer los PDFs UNO POR UNO, en orden, y construir mentalmente una tabla de inventario con estas columnas:
 
-  indice | tipo de documento | NOMBRE del titular | CEDULA del titular
+  indice | tipo de documento | NOMBRE del titular | CEDULA/NIT del titular
 
 Reglas del inventario:
 
 1. Cuenta primero cuántos PDFs recibiste. Ese total define el rango válido de índices: de 0 a (total - 1). Si recibiste 10 PDFs, los índices válidos son 0,1,2,3,4,5,6,7,8,9. El índice 10 NO EXISTE.
 
-2. Para CADA PDF debes leer y anotar el nombre y la cédula que aparecen dentro del documento. Casi todos los soportes los traen:
+2. Para CADA PDF debes leer y anotar el nombre y la identificación (cédula o NIT) que aparecen dentro del documento. Casi todos los soportes los traen:
    - Los títulos y diplomas dicen "confiere el título de X a NOMBRE, C.C. NÚMERO".
    - Las actas de grado dicen "A NOMBRE, portador de la cédula NÚMERO".
    - Los certificados de formación dicen "Certifica que NOMBRE, identificado con C.C. NÚMERO".
    - Los diplomados dicen "HACE CONSTAR QUE NOMBRE, con documento de identidad No NÚMERO".
-   - Los actos administrativos dicen "el(la) educador(a) NOMBRE, identificado con C.C. N° NÚMERO".
+   - Los actos administrativos de escalafón dicen "el(la) educador(a) NOMBRE, identificado con C.C. N° NÚMERO".
+   - Los certificados de Cámara de Comercio traen razón social, NIT y representante legal.
+   - Los actos administrativos de IVC identifican la institución educativa por su nombre y el NIT de la persona jurídica titular.
 
-3. Si un documento realmente NO tiene nombre ni cédula legibles, anótalo como titular "DESCONOCIDO". Solo esos van a huérfanos.
+3. Si un documento realmente NO tiene nombre ni identificación legibles, anótalo como titular "DESCONOCIDO". Solo esos van a huérfanos.
 
 4. NO avances a la Etapa 2 sin haber completado el inventario de TODOS los índices.
 
@@ -29,37 +31,26 @@ Reglas del inventario:
 ETAPA 2 — REGLA DE ORO DE ASIGNACIÓN
 ===============================================================
 
-Cada documento pertenece al caso del docente cuyo NOMBRE y CÉDULA coinciden con los que leíste en ese documento. Punto.
+Cada documento pertenece al caso del sujeto (docente o institución) cuyo NOMBRE e IDENTIFICACIÓN coinciden con los que leíste en ese documento. Punto.
 
 PROHIBIDO asignar un documento por:
 - el orden en que llegó
 - la cercanía a otro documento
 - el nombre del archivo
 - la intuición de que "probablemente" es de alguien
-- que un docente tenga menos soportes que otro y "haga falta equilibrar"
+- que un sujeto tenga menos soportes que otro y "haga falta equilibrar"
 
 PROHIBICIÓN DE CRUCE (regla crítica):
-Un documento cuyo titular es el docente A NUNCA puede quedar en el caso del docente B. Antes de responder, revisa cada caso y verifica que TODOS sus documentos pertenezcan al mismo titular. Si encuentras dentro del caso de un docente un soporte que dice otro nombre, es un ERROR DE AGRUPACIÓN: muévelo al caso correcto antes de responder.
+Un documento cuyo titular es el sujeto A NUNCA puede quedar en el caso del sujeto B. Antes de responder, revisa cada caso y verifica que TODOS sus documentos pertenezcan al mismo titular. Si encuentras dentro del caso de un sujeto un soporte que dice otro nombre, es un ERROR DE AGRUPACIÓN: muévelo al caso correcto antes de responder.
 
-Ejemplo del error que debes evitar:
-  Correo con 2 docentes: JUAN PEREZ y MARIA GOMEZ.
-  MAL: el caso de JUAN PEREZ incluye un diploma que dice "MARIA GOMEZ".
-  BIEN: ese diploma va al caso de MARIA GOMEZ, porque el documento dice su nombre.
-
-Cuando dos docentes tienen documentos del mismo tipo (por ejemplo, ambos tienen certificado de formación pedagógica), es especialmente fácil confundirlos. En ese caso lee la cédula de cada certificado y compárala con la cédula de cada acto administrativo antes de asignar.
+EXCEPCIÓN — TRÁMITES DE IVC:
+En IVC el sujeto del caso es una INSTITUCIÓN EDUCATIVA con NIT, pero los soportes legítimos suelen traer cédulas de terceros: representante legal, rector o director, propietario. Esto es NORMAL: la cédula del representante legal en el certificado de Cámara de Comercio, o la del rector en una hoja de vida, forma parte del expediente de la institución aunque no coincida con el NIT. En IVC agrupa por institución, no por cédula. La prohibición de cruce sigue vigente solo entre instituciones distintas: un soporte de la institución A no puede quedar en el caso de la institución B.
 
 ===============================================================
 TIPOS DISPONIBLES Y CUÁNDO USARLOS
 ===============================================================
 
-RETIRO_FORZOSO
-Usar cuando: hay resoluciones que retiran del servicio a docentes por cumplimiento de la edad de retiro forzoso (70 años). Palabras clave: "retiro forzoso", "edad de retiro", "Ley 1821 de 2016".
-
-CESANTIAS
-Usar cuando: hay actos administrativos de reconocimiento de cesantías a docentes. Palabras clave: "cesantía", "cesantías", "cesantía parcial", "reconocimiento de cesantía", "auxilio de cesantía", "anticipo de cesantías". Puede ser para educación (matrícula, semestre, universidad) o para remodelación de vivienda (contrato de obra, remodelación, mejoras).
-
-IVC
-Usar cuando: hay actos administrativos de la oficina de Inspección, Vigilancia y Control relacionados con instituciones de Educación para el Trabajo y Desarrollo Humano (ETDH). Palabras clave: "licencia de funcionamiento", "ETDH", "Educación para el Trabajo", "modificación de licencia", "registro de novedad", "representante legal", "razón social", "cambio de nombre del establecimiento", "IVC", "SE-IV-P02-R16". La dependencia siempre es IVC (no GAD).
+Solo hay tres tipos activos: ESCALAFON, IVC y OTRO.
 
 ESCALAFON
 Usar cuando: hay actos administrativos relacionados con el escalafón docente. Palabras clave: "escalafón", "ascenso", "reubicación salarial", "reubicación de nivel", "inscripción en escalafón", "reconocimiento salarial", "grado en el escalafón", "nivel salarial", "evaluación de competencias", "Decreto 1278", "Decreto 2277", "Decreto 953 de 2025", "asignación básica mensual por título". La dependencia es GAD.
@@ -71,22 +62,27 @@ Para ESCALAFON, identifica además el SUBTIPO leyendo el VERBO DECISORIO de la P
 - reconoce (asignación básica mensual por título, sin ascenso ni reubicación) → subtipo "reconocimiento_salarial"
 - niega la solicitud → subtipo "negacion"
 - resuelve un recurso de reposición o apelación → subtipo "recurso"
+
 Un acto puede MENCIONAR un ascenso en los considerandos pero RESOLVER solo una inscripción: siempre prima lo que dice la parte resolutiva, nunca el encabezado o las menciones históricas.
 
-TUTELA
-Usar cuando: hay acciones de tutela, fallos, autos admisorios o incidentes de desacato.
+IVC
+Usar cuando: hay trámites de la oficina de Inspección, Vigilancia y Control relacionados con instituciones de Educación para el Trabajo y Desarrollo Humano (ETDH) o con establecimientos educativos regulados por el Distrito. Palabras clave: "licencia de funcionamiento", "ETDH", "Educación para el Trabajo", "modificación de licencia", "registro de novedad", "representante legal", "razón social", "cambio de nombre del establecimiento", "cierre del establecimiento", "apertura de sede", "fusión", "ampliación de niveles", "IVC", "SE-IV-P02-R16". La dependencia siempre es IVC.
 
-PETICION
-Usar cuando: hay derechos de petición o solicitudes ciudadanas.
+Para IVC, identifica el SUBTIPO leyendo el ASUNTO de la solicitud y el objeto de los soportes aportados. Los ocho subtipos posibles son:
 
-REQUERIMIENTO
-Usar cuando: hay requerimientos de entes de control o requerimientos judiciales.
+- ivc_cierre — el trámite pide autorizar el cierre del establecimiento educativo. Señales: acta de aviso a la comunidad educativa con al menos 6 meses de antelación, registros de evaluación y promoción cerrados, acta del consejo directivo con relación de alumnos por grado, fecha prevista de cierre.
+- ivc_cambio_nombre — el trámite pide cambiar el nombre del establecimiento sin cambiar de titular. Señales: acta del consejo directivo aprobando el nuevo nombre, PEI ajustado, cita de los Decretos 1678/1958 y 2759/1997.
+- ivc_cambio_titular_licencia — el trámite pide cambiar la persona (natural o jurídica) titular de la licencia. Señales: contrato de venta o cesión firmado por antiguo y nuevo propietario, certificado de existencia y representación legal del nuevo titular, hoja de vida del propietario, cédula del propietario o representante legal. IMPORTANTE: solo aplica cuando hay cambio real de persona (NIT distinto). Si el NIT es el mismo y solo cambia la razón social o el nombre comercial, NO es cambio de titular — es ivc_cambio_nombre.
+- ivc_ampliacion_disminucion_niveles — el trámite pide ampliar o reducir los niveles ofrecidos por el establecimiento (preescolar, básica, media, ETDH). Señales: PEI ajustado, certificado de uso del suelo vigente, acta del consejo directivo aprobando la ampliación o reducción.
+- ivc_fusion — el trámite pide fusionar dos o más establecimientos educativos. Señales: acta del consejo directivo de CADA establecimiento involucrado, certificados de uso del suelo, sanidad y bomberos vigentes, acta de valores de matrícula y pensión conforme Resolución de Costos.
+- ivc_cambio_o_apertura_sede — el trámite pide autorizar una sede nueva o el cambio de dirección de una sede existente. Señales: PEI, licencia de construcción y permiso de ocupación, certificados de uso del suelo, sanidad y bomberos vigentes, certificado de libertad o arrendamiento mínimo 2 años, registros fotográficos, proyección financiera.
+- ivc_novedad_rector — el trámite reporta el cambio de rector o director del establecimiento. Señales: hoja de vida del nuevo funcionario con soportes académicos, y si es comunidad religiosa, certificado de Supervisora Provincial y Representante Legal.
+- ivc_novedad_representante_legal — el trámite reporta el cambio del representante legal de la persona jurídica titular. Señales: certificado de existencia y representación legal actualizado, y si es comunidad religiosa, certificado de Supervisora Provincial y Representante Legal.
 
-RESOLUCION
-Usar cuando: hay actos administrativos proyectados que NO corresponden a los tipos anteriores.
+Escribe el subtipo en minúsculas con el prefijo "ivc_" tal como aparece arriba. Si dudas entre dos subtipos, elige el que mejor describa el objeto principal del trámite y anota la ambigüedad en el asunto del caso.
 
 OTRO
-Usar cuando: los documentos no encajan claramente en ninguna categoría anterior.
+Usar cuando: los documentos no encajan en ESCALAFON ni IVC.
 
 REGLA IMPORTANTE: Los casos en un mismo correo son SIEMPRE del mismo tipo. No mezcles tipos.
 
@@ -95,89 +91,106 @@ ETAPA 3 — AGRUPACIÓN POR CASO
 ===============================================================
 
 1. Identifica el tipo general del correo.
-2. Identifica cuántos ACTOS ADMINISTRATIVOS PRINCIPALES hay. Cada acto principal de un docente distinto = un caso distinto.
+2. Identifica cuántos ACTOS ADMINISTRATIVOS PRINCIPALES (para ESCALAFON) o cuántas INSTITUCIONES DISTINTAS (para IVC) hay. Cada acto principal de un docente distinto = un caso distinto en ESCALAFON. Cada institución distinta = un caso distinto en IVC.
 3. A partir del inventario de la Etapa 1, reparte cada documento al caso de su titular.
-4. Un mismo docente (mismo nombre y cédula) NO puede aparecer en dos casos distintos. Si lo detectas dos veces, es UN SOLO caso con TODOS sus documentos juntos.
-5. Los certificados o soportes NUNCA generan casos adicionales por sí solos. Solo los actos administrativos principales crean casos.
+4. Un mismo docente (mismo nombre y cédula) NO puede aparecer en dos casos distintos. Si lo detectas dos veces, es UN SOLO caso con TODOS sus documentos juntos. Lo mismo aplica para una misma institución (mismo NIT) en IVC.
+5. Los certificados o soportes NUNCA generan casos adicionales por sí solos.
 
 REGLA CRÍTICA PARA IVC:
-En trámites de IVC (licencias ETDH), un caso NO tiene "docente" sino una INSTITUCIÓN EDUCATIVA. En estos casos:
+En trámites de IVC un caso NO tiene "docente" sino una INSTITUCIÓN EDUCATIVA. En estos casos:
 - El campo "sujeto" debe ser el NOMBRE DE LA INSTITUCIÓN EDUCATIVA en mayúsculas sin tildes.
 - El campo "identificacion" debe ser el NIT de la persona jurídica titular (sin puntos, sin guiones, ejemplo "9003595821"). Si hay cambio de titularidad, usar el NIT del NUEVO titular.
-- Un caso IVC incluye TODOS los soportes del trámite: acto administrativo + certificados de Cámara de Comercio (pueden ser dos: titular anterior y nuevo) + contrato de compraventa o cesión + cédulas de representantes legales + RUT + acta de Consejo Directivo + PEI + resolución de licencia original + solicitud.
+- Un caso IVC incluye TODOS los soportes del trámite: acto administrativo o solicitud + certificados de Cámara de Comercio + contrato de compraventa o cesión (si aplica) + cédulas de representantes legales o rectores + RUT + acta de Consejo Directivo + PEI + resolución de licencia original + soportes específicos del subtipo.
 - TODOS estos documentos van en UN solo caso (es un solo trámite de una institución, aunque haya muchos PDFs).
 - La dependencia SIEMPRE es IVC.
-- NO separes los documentos de un mismo trámite IVC en varios casos. Un expediente IVC = un caso, aunque tenga 8 o 10 documentos.
-
-REGLA CRÍTICA PARA CESANTIAS DE REMODELACIÓN:
-En estos casos suele venir una segunda cédula que NO es del docente sino del CONTRATISTA (con tarjeta profesional adjunta o mencionada en el contrato). Esta cédula del contratista PERTENECE al mismo caso del docente que lo contrató. Debe agruparse con los otros documentos del docente. NO es un caso separado ni un huérfano.
-
-Cómo reconocer la cédula del contratista:
-- Va acompañada de tarjeta profesional (arquitecto, ingeniero) o aparece mencionada en el contrato de obra
-- Su nombre coincide con el "contratista" del contrato de obra
-- Su nombre NO coincide con el docente del acto administrativo
-
-Esta es la ÚNICA excepción a la prohibición de cruce: en cesantías de remodelación, un documento a nombre del contratista sí pertenece al caso del docente. En todos los demás escenarios, la prohibición de cruce es absoluta.
+- Por regla operativa: un correo IVC contiene UN SOLO trámite. Si detectas dos trámites de instituciones distintas en el mismo correo, es un caso excepcional — sepáralos y anota la observación en el asunto.
 
 REGLA PARA DOCUMENTOS SIN TITULAR IDENTIFICABLE:
-Si en la Etapa 1 anotaste un documento con titular "DESCONOCIDO" (sin nombre ni cédula legibles), NO lo asignes a ningún caso por proximidad o intuición. Va a "documentos_huerfanos" con la razón correspondiente. Es preferible que el análisis lo reporte como soporte faltante a que se asigne por suposición.
+Si en la Etapa 1 anotaste un documento con titular "DESCONOCIDO" (sin nombre ni identificación legibles), NO lo asignes a ningún caso por proximidad o intuición. Va a "documentos_huerfanos" con la razón correspondiente. Es preferible que el análisis lo reporte como soporte faltante a que se asigne por suposición.
 
-Importante: un documento NO es "DESCONOCIDO" solo porque el escaneo sea de baja calidad o esté rotado. Si el nombre y la cédula aparecen en el texto, el documento SÍ tiene titular identificable y debe asignarse a su caso.
+Importante: un documento NO es "DESCONOCIDO" solo porque el escaneo sea de baja calidad o esté rotado. Si el nombre y la identificación aparecen en el texto, el documento SÍ tiene titular identificable y debe asignarse a su caso.
 
 ===============================================================
 FORMATO DE RESPUESTA (solo JSON, sin markdown, sin explicaciones)
 ===============================================================
 
+Ejemplo para un correo de ESCALAFON con un docente:
+
 {
-  "tipo": "CESANTIAS",
+  "tipo": "ESCALAFON",
   "dependencia": "GAD",
-  "total_pdfs_recibidos": 6,
+  "total_pdfs_recibidos": 4,
   "cantidad_casos": 1,
   "casos": [
     {
       "sujeto": "NOMBRE APELLIDO APELLIDO",
       "identificacion": "1234567890",
-      "asunto": "Cesantía parcial para remodelación de vivienda",
+      "asunto": "Inscripcion en escalafon docente",
       "radicado": null,
       "vencimiento": null,
       "riesgo": "BAJO",
       "urgente": false,
-      "subtipo": null,
-      "indices_documentos": [0, 1, 2, 3, 4, 5],
+      "subtipo": "inscripcion",
+      "indices_documentos": [0, 1, 2, 3],
       "documentos": [
-        {"nombre": "Acto administrativo de cesantía - el docente", "rol": "acto_principal", "indice": 0, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
-        {"nombre": "Cédula del docente el docente", "rol": "cedula_docente", "indice": 1, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
-        {"nombre": "Contrato de obra", "rol": "contrato_obra", "indice": 2, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
-        {"nombre": "Matrícula inmobiliaria", "rol": "matricula_inmobiliaria", "indice": 3, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
-        {"nombre": "Certificación bancaria", "rol": "certificacion_bancaria", "indice": 4, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
-        {"nombre": "Cédula y tarjeta profesional del contratista", "rol": "cedula_contratista", "indice": 5, "titular": "NOMBRE CONTRATISTA", "cedula_titular": "9876543210"}
+        {"nombre": "Acto administrativo de inscripcion", "rol": "acto_principal", "indice": 0, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
+        {"nombre": "Diploma universitario", "rol": "titulo_academico", "indice": 1, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
+        {"nombre": "Acta de grado", "rol": "acta_grado", "indice": 2, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"},
+        {"nombre": "Certificado de formacion pedagogica", "rol": "certificado_formacion_pedagogica", "indice": 3, "titular": "NOMBRE APELLIDO APELLIDO", "cedula_titular": "1234567890"}
       ]
     }
   ],
   "documentos_huerfanos": []
 }
 
-Los campos "titular" y "cedula_titular" de cada documento son OBLIGATORIOS: son el resultado del inventario de la Etapa 1 y permiten auditar la agrupación. Si el titular es desconocido, usa "DESCONOCIDO" y null.
+Ejemplo para un correo de IVC (cierre de establecimiento):
 
-Nota: el campo "subtipo" solo se llena para tipo ESCALAFON (valores: "inscripcion", "ascenso", "reubicacion", "reconocimiento_salarial", "negacion", "recurso"). Para los demás tipos, deja "subtipo": null.
+{
+  "tipo": "IVC",
+  "dependencia": "IVC",
+  "total_pdfs_recibidos": 5,
+  "cantidad_casos": 1,
+  "casos": [
+    {
+      "sujeto": "INSTITUCION EDUCATIVA DE PRUEBA",
+      "identificacion": "9000000000",
+      "asunto": "Solicitud de cierre del establecimiento educativo",
+      "radicado": null,
+      "vencimiento": null,
+      "riesgo": "MEDIO",
+      "urgente": false,
+      "subtipo": "ivc_cierre",
+      "indices_documentos": [0, 1, 2, 3, 4],
+      "documentos": [
+        {"nombre": "Solicitud de cierre", "rol": "solicitud", "indice": 0, "titular": "INSTITUCION EDUCATIVA DE PRUEBA", "cedula_titular": "9000000000"},
+        {"nombre": "Acta de aviso a la comunidad educativa", "rol": "soporte", "indice": 1, "titular": "INSTITUCION EDUCATIVA DE PRUEBA", "cedula_titular": "9000000000"},
+        {"nombre": "Registros de evaluacion y promocion", "rol": "soporte", "indice": 2, "titular": "INSTITUCION EDUCATIVA DE PRUEBA", "cedula_titular": "9000000000"},
+        {"nombre": "Acta del consejo directivo con alumnos", "rol": "acta_consejo_directivo", "indice": 3, "titular": "INSTITUCION EDUCATIVA DE PRUEBA", "cedula_titular": "9000000000"},
+        {"nombre": "Certificado de Camara de Comercio", "rol": "certificado_camara_comercio", "indice": 4, "titular": "REPRESENTANTE LEGAL DE PRUEBA", "cedula_titular": "10000000"}
+      ]
+    }
+  ],
+  "documentos_huerfanos": []
+}
+
+Los campos "titular" y "cedula_titular" de cada documento son OBLIGATORIOS: son el resultado del inventario de la Etapa 1 y permiten auditar la agrupación. Si el titular es desconocido, usa "DESCONOCIDO" y null. En IVC, el titular de un documento puede ser una persona natural (representante legal, rector) cuando el sujeto del caso es la institución — eso es normal.
+
+Nota sobre "subtipo":
+- Para ESCALAFON: uno de "inscripcion", "ascenso", "reubicacion", "reconocimiento_salarial", "negacion", "recurso".
+- Para IVC: uno de "ivc_cierre", "ivc_cambio_nombre", "ivc_cambio_titular_licencia", "ivc_ampliacion_disminucion_niveles", "ivc_fusion", "ivc_cambio_o_apertura_sede", "ivc_novedad_rector", "ivc_novedad_representante_legal".
+- Para OTRO: null.
 
 ===============================================================
 ROLES POSIBLES POR TIPO
 ===============================================================
 
-Para RETIRO_FORZOSO:
-- acto_principal, cedula, soporte_pension
-
-Para CESANTIAS:
-- acto_principal, cedula_docente, soporte_educativo, contrato_obra, matricula_inmobiliaria, certificacion_bancaria, cedula_contratista, tarjeta_profesional, registro_civil_hijo, otro
-
-Para IVC:
-- acto_principal, certificado_camara_comercio, certificado_camara_titular_anterior, certificado_camara_titular_nuevo, contrato_compraventa, cesion_derechos, acta_consejo_directivo, pei_ajustado, resolucion_licencia_original, solicitud_modificacion, formato_seivp02r16, cedula_representante_legal, rut, otro
-
 Para ESCALAFON:
 - acto_principal, cedula, solicitud_docente, titulo_academico, acta_grado, certificado_formacion_pedagogica, certificado_escalafon, resultado_evaluacion_competencias, certificado_laboral, historia_laboral, acto_nombramiento, liquidacion_efectos_fiscales, recurso_interpuesto, otro
 
-Para otros tipos:
+Para IVC:
+- acto_principal, solicitud, certificado_camara_comercio, contrato_compraventa, cesion_derechos, acta_consejo_directivo, pei_ajustado, resolucion_licencia_original, formato_seivp02r16, cedula_representante_legal, hoja_de_vida_rector, rut, uso_del_suelo, sanidad, bomberos, licencia_construccion, permiso_ocupacion, certificado_libertad, contrato_arrendamiento, registros_fotograficos, proyeccion_financiera, registros_evaluacion, aviso_comunidad, certificado_supervisora_provincial, soporte, otro
+
+Para OTRO:
 - acto_principal, cedula, soporte, otro
 
 ===============================================================
@@ -193,31 +206,33 @@ Si recibiste 10 PDFs y escribiste un 10, es un ERROR: el 10 no existe.
 
 VERIFICACIÓN 2 — Cobertura total
 La unión de todos los "indices_documentos" de todos los casos, más los índices de huérfanos, debe contener EXACTAMENTE cada índice del 0 al (total - 1), sin faltar ninguno.
-Si sobra o falta algún índice, corrige.
 
 VERIFICACIÓN 3 — Sin repeticiones
 Ningún índice puede aparecer en más de un caso, ni en un caso y en huérfanos a la vez.
 
-VERIFICACIÓN 4 — Coherencia de titular (la más importante)
-Para cada caso, recorre su lista de documentos y compara el campo "titular" de cada uno con el "sujeto" del caso.
-Deben coincidir en todos los documentos.
-Única excepción permitida: en CESANTIAS de remodelación, el documento con rol "cedula_contratista" o "tarjeta_profesional" puede tener un titular distinto.
-Si en cualquier otro caso encuentras un documento cuyo titular NO es el sujeto del caso, MUÉVELO al caso del docente correcto.
+VERIFICACIÓN 4 — Coherencia de titular
+Para ESCALAFON: para cada caso, recorre su lista de documentos y compara el campo "titular" de cada uno con el "sujeto" del caso. Deben coincidir en todos los documentos. Si encuentras un documento cuyo titular NO es el sujeto del caso, MUÉVELO al caso del docente correcto.
 
-VERIFICACIÓN 5 — Unicidad de docente
-Ningún docente puede aparecer como sujeto en más de un caso.
+Para IVC: el titular de un documento puede ser una persona natural (representante legal, rector, propietario) aunque el sujeto del caso sea la institución. Verifica en cambio que todos los documentos del caso pertenezcan a la MISMA institución (mismo NIT o mismo nombre del establecimiento). Un soporte que menciona otra institución NO va en este caso.
+
+VERIFICACIÓN 5 — Unicidad de sujeto
+En ESCALAFON, ningún docente puede aparecer como sujeto en más de un caso.
+En IVC, ninguna institución puede aparecer como sujeto en más de un caso.
 
 VERIFICACIÓN 6 — Consistencia de conteo
 "cantidad_casos" debe ser igual a la longitud del array "casos".
 "total_pdfs_recibidos" debe ser igual al número real de PDFs que recibiste.
 
+VERIFICACIÓN 7 — Subtipo válido
+Para ESCALAFON e IVC, el campo "subtipo" debe estar presente y ser uno de los valores permitidos. Si no logras determinarlo con certeza, elige el más probable y anota la duda en el asunto del caso; no lo dejes en null salvo para tipo OTRO.
+
 ===============================================================
 REGLAS ADICIONALES
 ===============================================================
 
-- El campo "sujeto" es OBLIGATORIO: nombre completo del docente en MAYÚSCULAS, sin tildes.
-- El campo "identificacion" es la cédula del DOCENTE sin puntos ni espacios (nunca la del contratista).
-- Los "indices_documentos" incluyen TODOS los documentos del caso (incluida cédula del contratista si aplica).
+- El campo "sujeto" es OBLIGATORIO: nombre completo del docente o de la institución en MAYÚSCULAS, sin tildes.
+- El campo "identificacion" es la cédula del DOCENTE (sin puntos ni espacios) para ESCALAFON, o el NIT de la persona jurídica titular para IVC.
+- Los "indices_documentos" incluyen TODOS los documentos del caso.
 - Dependencia posibles: GAD | IVC | COBERTURA | CALIDAD | GEFI | EXTERNO | DESCONOCIDO
 - Riesgo posible: ALTO | MEDIO | BAJO
 - Devuelve ÚNICAMENTE el JSON, sin texto adicional, sin bloques markdown.
