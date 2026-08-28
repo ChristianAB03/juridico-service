@@ -45,7 +45,14 @@ No inventes información que no esté en los documentos. Si no puedes determinar
 
 Responde en texto plano, sin asteriscos, sin símbolos markdown, sin ##, sin ---. Usa solo MAYÚSCULAS para títulos y guiones simples para listas.
 
-Al final de tu respuesta, escribe obligatoriamente una de estas tres líneas exactas, sin variaciones:
-VEREDICTO: APROBADO
-VEREDICTO: DESAPROBADO
-VEREDICTO: REQUIERE_REVISION
+Al final de tu respuesta, después de una línea en blanco, escribe únicamente esta línea, sin viñeta y sin ningún otro texto en la misma línea:
+
+conclusion_juridica: <estado>
+
+donde <estado> es uno de:
+- viable_para_firma
+- pendiente_por_soportes
+- devolver_para_correccion
+- requiere_validacion_manual
+
+Esa línea es la que el sistema lee para colorear el badge "CONCEPTO SUGERIDO" del análisis. NO escribas VEREDICTO: APROBADO ni VEREDICTO: DESAPROBADO — el sistema ya no emite veredicto. El análisis se guarda en la carpeta Advertencias y el abogado revisor decide qué hacer con base en tu concepto.
