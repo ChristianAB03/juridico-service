@@ -787,6 +787,37 @@ def procesar_correo(message_id: str, archivos_datos: list) -> dict:
             unicos.setdefault((c.get("sujeto"), c.get("identificacion")), c)
         casos = list(unicos.values())
 
+        # En IVC un mismo NIT = un mismo establecimiento educativo. Si el clasificador
+        # devuelve varios casos con el mismo NIT (por ejemplo, un caso para la persona
+        # juridica compradora y otro para el establecimiento en un cambio de titular),
+        # los fusionamos en uno y preferimos el sujeto que no parezca una persona
+        # juridica (S.A.S., LTDA, FUNDACION, ...) como nombre del establecimiento.
+        if tipo_general == "IVC":
+            _MARCAS_JURIDICAS = (" SAS", " S.A.S", " S.A.S.", " LTDA", " LTDA.",
+                                 "FUNDACION", "FUNDACIoN", "ASOCIACION", "CORPORACION",
+                                 " S.A", " S.A.")
+            def _parece_persona_juridica(nombre: str) -> bool:
+                n = (nombre or "").upper()
+                return any(m in n for m in _MARCAS_JURIDICAS)
+
+            por_nit = {}
+            for c in casos:
+                nit = (c.get("identificacion") or "").strip()
+                if not nit:
+                    por_nit.setdefault(id(c), c)
+                    continue
+                if nit not in por_nit:
+                    por_nit[nit] = c
+                else:
+                    prev = por_nit[nit]
+                    if _parece_persona_juridica(prev.get("sujeto")) and \
+                       not _parece_persona_juridica(c.get("sujeto")):
+                        por_nit[nit] = c
+                    print(f"  [WARN] IVC: dos casos con NIT {nit} "
+                          f"('{prev.get('sujeto')}' vs '{c.get('sujeto')}') "
+                          f"fusionados en uno.")
+            casos = list(por_nit.values())
+
         print(f"Tipo: {tipo_general} | Casos: {len(casos)}")
 
         # 2) ¿SE FILTRA POR CÉDULA?

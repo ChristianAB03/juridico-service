@@ -97,13 +97,29 @@ ETAPA 3 — AGRUPACIÓN POR CASO
 5. Los certificados o soportes NUNCA generan casos adicionales por sí solos.
 
 REGLA CRÍTICA PARA IVC:
-En trámites de IVC un caso NO tiene "docente" sino una INSTITUCIÓN EDUCATIVA. En estos casos:
-- El campo "sujeto" debe ser el NOMBRE DE LA INSTITUCIÓN EDUCATIVA en mayúsculas sin tildes.
+En trámites de IVC un caso NO tiene "docente" sino un ESTABLECIMIENTO EDUCATIVO. En estos casos:
+- El campo "sujeto" debe ser SIEMPRE el NOMBRE DEL ESTABLECIMIENTO EDUCATIVO en mayúsculas sin tildes (por ejemplo "PREESCOLAR STEAM", "COLEGIO SAN JOSE"). NUNCA es el nombre de la persona jurídica titular ("STEAM HUB S.A.S", "FUNDACION I2"): la persona jurídica es solo la dueña del establecimiento, no el sujeto del trámite.
 - El campo "identificacion" debe ser el NIT de la persona jurídica titular (sin puntos, sin guiones, ejemplo "9003595821"). Si hay cambio de titularidad, usar el NIT del NUEVO titular.
 - Un caso IVC incluye TODOS los soportes del trámite: acto administrativo o solicitud + certificados de Cámara de Comercio + contrato de compraventa o cesión (si aplica) + cédulas de representantes legales o rectores + RUT + acta de Consejo Directivo + PEI + resolución de licencia original + soportes específicos del subtipo.
-- TODOS estos documentos van en UN solo caso (es un solo trámite de una institución, aunque haya muchos PDFs).
+- TODOS estos documentos van en UN solo caso (es un solo trámite de un establecimiento, aunque haya muchos PDFs y aunque intervengan dos personas jurídicas — vendedor y comprador en cambio de titular).
 - La dependencia SIEMPRE es IVC.
-- Por regla operativa: un correo IVC contiene UN SOLO trámite. Si detectas dos trámites de instituciones distintas en el mismo correo, es un caso excepcional — sepáralos y anota la observación en el asunto.
+
+REGLA DE UN SOLO CASO POR ESTABLECIMIENTO:
+Un correo IVC = UN solo establecimiento educativo = UN solo caso. Si dudas si son dos casos:
+- Distintas PERSONAS JURÍDICAS en el mismo expediente (por ejemplo Fundación I2 vendedor y STEAM HUB S.A.S. comprador) NO son dos casos — son las dos partes del MISMO cambio de titular del MISMO establecimiento. Es UN solo caso, con sujeto = nombre del establecimiento e identificacion = NIT del NUEVO titular.
+- Distintos SUBTIPOS en el mismo correo (por ejemplo novedad de rector + novedad de representante legal para el mismo establecimiento) tampoco son dos casos — son UN solo caso; elige el subtipo del objeto principal de la solicitud y menciona el otro en el asunto.
+- Solo son dos casos cuando aparecen dos ESTABLECIMIENTOS EDUCATIVOS DISTINTOS con nombre y código DANE diferentes (típico solo en ivc_fusion, donde varios establecimientos se integran en uno).
+
+EJEMPLO DEL ERROR A EVITAR en cambio de titular:
+Correo con: solicitud + contrato compraventa + Cámara de Comercio de vendedor (FUNDACION I2, NIT 9012663954) + Cámara de Comercio de comprador (STEAM HUB S.A.S., NIT 9020454301) + resolución de licencia original + cédulas.
+MAL — DOS casos:
+  Caso 1: sujeto "STEAM HUB S.A.S", identificacion "9020454301"
+  Caso 2: sujeto "PREESCOLAR STEAM", identificacion "9020454301"
+BIEN — UN solo caso:
+  Caso 1: sujeto "PREESCOLAR STEAM", identificacion "9020454301", subtipo "ivc_cambio_titular_licencia", con TODOS los documentos.
+
+DEDUPLICACIÓN OBLIGATORIA:
+Antes de responder, revisa los casos IVC devueltos. Si dos casos comparten el mismo NIT en el campo identificacion, son el mismo trámite. Fusiónalos en uno, conservando el nombre del ESTABLECIMIENTO EDUCATIVO como sujeto (nunca el nombre de una persona jurídica).
 
 REGLA PARA DOCUMENTOS SIN TITULAR IDENTIFICABLE:
 Si en la Etapa 1 anotaste un documento con titular "DESCONOCIDO" (sin nombre ni identificación legibles), NO lo asignes a ningún caso por proximidad o intuición. Va a "documentos_huerfanos" con la razón correspondiente. Es preferible que el análisis lo reporte como soporte faltante a que se asigne por suposición.
