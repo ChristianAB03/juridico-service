@@ -50,7 +50,7 @@ En IVC el sujeto del caso es una INSTITUCIÓN EDUCATIVA con NIT, pero los soport
 TIPOS DISPONIBLES Y CUÁNDO USARLOS
 ===============================================================
 
-Solo hay tres tipos activos: ESCALAFON, IVC y OTRO.
+Solo hay cuatro tipos activos: ESCALAFON, IVC, FONDO_PRESTACIONES y OTRO.
 
 ESCALAFON
 Usar cuando: hay actos administrativos relacionados con el escalafón docente. Palabras clave: "escalafón", "ascenso", "reubicación salarial", "reubicación de nivel", "inscripción en escalafón", "reconocimiento salarial", "grado en el escalafón", "nivel salarial", "evaluación de competencias", "Decreto 1278", "Decreto 2277", "Decreto 953 de 2025", "asignación básica mensual por título". La dependencia es GAD.
@@ -81,8 +81,23 @@ Para IVC, identifica el SUBTIPO leyendo el ASUNTO de la solicitud y el objeto de
 
 Escribe el subtipo en minúsculas con el prefijo "ivc_" tal como aparece arriba. Si dudas entre dos subtipos, elige el que mejor describa el objeto principal del trámite y anota la ambigüedad en el asunto del caso.
 
+FONDO_PRESTACIONES
+Usar cuando: hay trámites del Fondo Nacional de Prestaciones Sociales del Magisterio (FOMAG / Fiduprevisora) sobre una prestación social de un docente o de sus beneficiarios. Palabras clave: "pensión de jubilación", "pensión de invalidez", "Fiduprevisora", "FOMAG", "seguro por muerte", "auxilio funerario", "auxilio por muerte", "gastos fúnebres", "dictamen de pérdida de capacidad laboral", "declaración juramentada de no pensión", "Formato PQR" de prestaciones. La dependencia es FONDO.
+
+Para FONDO_PRESTACIONES, identifica el SUBTIPO leyendo la petición del Formato PQR y los soportes aportados. Los cinco subtipos posibles son:
+
+- fondo_pension_jubilacion — el docente solicita pensión de jubilación. Señales: solicitud de pensión, declaración juramentada de que no recibe otra pensión, hoja de revisión y correo de aprobación de Fiduprevisora. NO hay dictamen de pérdida de capacidad laboral.
+- fondo_pension_invalidez — el docente solicita pensión de invalidez. Señal distintiva: hay un dictamen de pérdida de capacidad laboral, además de la revisión o el aval de Fiduprevisora.
+- fondo_recurso_reposicion — se interpone recurso de reposición contra una resolución previa del Fondo. Señales: escrito de recurso, resolución inicial que se recurre, soportes de la solicitud del docente.
+- fondo_seguro_muerte — los beneficiarios reclaman el SEGURO por muerte del docente. Señales: registro civil de defunción del docente, cédulas de beneficiarios, y prueba de vínculo (registro civil de matrimonio, partida de matrimonio o declaración juramentada de convivencia). NO se soporta con facturas.
+- fondo_auxilio_muerte — los beneficiarios reclaman el AUXILIO funerario por muerte del docente. Señal distintiva: FACTURAS de gastos fúnebres, además del registro civil de defunción y la cédula del solicitante. NO requiere prueba de convivencia ni de matrimonio.
+
+Distinción crítica: SEGURO por muerte se prueba con el VÍNCULO (matrimonio/convivencia); AUXILIO por muerte se prueba con las FACTURAS de gastos fúnebres. Si hay facturas, es auxilio; si hay prueba de vínculo y reclamación económica del seguro, es seguro.
+
+Escribe el subtipo en minúsculas con el prefijo "fondo_" tal como aparece arriba. Nota: el subtipo "recurso" existe tanto en ESCALAFON como en FONDO_PRESTACIONES; para decidir, lee qué resolución se recurre — si la resolución inicial es de una prestación del Fondo (pensión, seguro, auxilio), el tipo es FONDO_PRESTACIONES con subtipo fondo_recurso_reposicion.
+
 OTRO
-Usar cuando: los documentos no encajan en ESCALAFON ni IVC.
+Usar cuando: los documentos no encajan en ESCALAFON, IVC ni FONDO_PRESTACIONES.
 
 REGLA IMPORTANTE: Los casos en un mismo correo son SIEMPRE del mismo tipo. No mezcles tipos.
 
@@ -91,7 +106,7 @@ ETAPA 3 — AGRUPACIÓN POR CASO
 ===============================================================
 
 1. Identifica el tipo general del correo.
-2. Identifica cuántos ACTOS ADMINISTRATIVOS PRINCIPALES (para ESCALAFON) o cuántas INSTITUCIONES DISTINTAS (para IVC) hay. Cada acto principal de un docente distinto = un caso distinto en ESCALAFON. Cada institución distinta = un caso distinto en IVC.
+2. Identifica cuántos casos hay: para ESCALAFON, cuántos ACTOS ADMINISTRATIVOS PRINCIPALES de docentes distintos; para IVC, cuántas INSTITUCIONES DISTINTAS; para FONDO_PRESTACIONES, cuántos DOCENTES CAUSANTES distintos. Cada docente distinto = un caso en ESCALAFON y en FONDO_PRESTACIONES. Cada institución distinta = un caso en IVC.
 3. A partir del inventario de la Etapa 1, reparte cada documento al caso de su titular.
 4. Un mismo docente (mismo nombre y cédula) NO puede aparecer en dos casos distintos. Si lo detectas dos veces, es UN SOLO caso con TODOS sus documentos juntos. Lo mismo aplica para una misma institución (mismo NIT) en IVC.
 5. Los certificados o soportes NUNCA generan casos adicionales por sí solos.
@@ -120,6 +135,15 @@ BIEN — UN solo caso:
 
 DEDUPLICACIÓN OBLIGATORIA:
 Antes de responder, revisa los casos IVC devueltos. Si dos casos comparten el mismo NIT en el campo identificacion, son el mismo trámite. Fusiónalos en uno, conservando el nombre del ESTABLECIMIENTO EDUCATIVO como sujeto (nunca el nombre de una persona jurídica).
+
+REGLA CRÍTICA PARA FONDO_PRESTACIONES:
+En trámites del Fondo el sujeto del caso es el DOCENTE CAUSANTE de la prestación (no los beneficiarios). En estos casos:
+- El campo "sujeto" debe ser el NOMBRE DEL DOCENTE en mayúsculas sin tildes. En trámites por muerte (seguro o auxilio), el docente es el CAUSANTE fallecido, aunque quienes firmen la solicitud sean los beneficiarios.
+- El campo "identificacion" debe ser la CÉDULA del docente causante (sin puntos ni espacios).
+- Un caso de Fondo incluye TODOS los soportes del trámite: Formato PQR + cédula del docente + soportes específicos del subtipo (dictamen de PCL, conceptos de Fiduprevisora, registro civil de defunción, cédulas de beneficiarios, prueba de vínculo, facturas de gastos fúnebres).
+- Las cédulas de beneficiarios, del cónyuge o de quien pagó los gastos fúnebres PERTENECEN al caso del docente causante. NO generan casos separados ni son huérfanos, aunque no coincidan con la cédula del docente.
+- La dependencia SIEMPRE es FONDO.
+- Un correo del Fondo = un solo docente causante = un solo caso. Solo hay dos casos si el correo trae prestaciones de DOS docentes causantes distintos (dos cédulas de docente distintas). En ese caso, deduplica por cédula del docente.
 
 REGLA PARA DOCUMENTOS SIN TITULAR IDENTIFICABLE:
 Si en la Etapa 1 anotaste un documento con titular "DESCONOCIDO" (sin nombre ni identificación legibles), NO lo asignes a ningún caso por proximidad o intuición. Va a "documentos_huerfanos" con la razón correspondiente. Es preferible que el análisis lo reporte como soporte faltante a que se asigne por suposición.
@@ -194,6 +218,7 @@ Los campos "titular" y "cedula_titular" de cada documento son OBLIGATORIOS: son 
 Nota sobre "subtipo":
 - Para ESCALAFON: uno de "inscripcion", "ascenso", "reubicacion", "reconocimiento_salarial", "negacion", "recurso".
 - Para IVC: uno de "ivc_cierre", "ivc_cambio_nombre", "ivc_cambio_titular_licencia", "ivc_ampliacion_disminucion_niveles", "ivc_fusion", "ivc_cambio_o_apertura_sede", "ivc_novedad_rector", "ivc_novedad_representante_legal".
+- Para FONDO_PRESTACIONES: uno de "fondo_pension_jubilacion", "fondo_pension_invalidez", "fondo_recurso_reposicion", "fondo_seguro_muerte", "fondo_auxilio_muerte".
 - Para OTRO: null.
 
 ===============================================================
@@ -205,6 +230,9 @@ Para ESCALAFON:
 
 Para IVC:
 - acto_principal, solicitud, certificado_camara_comercio, contrato_compraventa, cesion_derechos, acta_consejo_directivo, pei_ajustado, resolucion_licencia_original, formato_seivp02r16, cedula_representante_legal, hoja_de_vida_rector, rut, uso_del_suelo, sanidad, bomberos, licencia_construccion, permiso_ocupacion, certificado_libertad, contrato_arrendamiento, registros_fotograficos, proyeccion_financiera, registros_evaluacion, aviso_comunidad, certificado_supervisora_provincial, soporte, otro
+
+Para FONDO_PRESTACIONES:
+- solicitud_pqr, cedula_docente, cedula_beneficiario, declaracion_juramentada, dictamen_pcl, hoja_revision_fiduprevisora, correo_aprobacion_fiduprevisora, resolucion_inicial, recurso_interpuesto, registro_civil_defuncion, registro_civil_matrimonio, partida_matrimonio, declaracion_convivencia, factura_gastos_funebres, soporte, otro
 
 Para OTRO:
 - acto_principal, cedula, soporte, otro
@@ -231,24 +259,27 @@ Para ESCALAFON: para cada caso, recorre su lista de documentos y compara el camp
 
 Para IVC: el titular de un documento puede ser una persona natural (representante legal, rector, propietario) aunque el sujeto del caso sea la institución. Verifica en cambio que todos los documentos del caso pertenezcan a la MISMA institución (mismo NIT o mismo nombre del establecimiento). Un soporte que menciona otra institución NO va en este caso.
 
+Para FONDO_PRESTACIONES: el titular de un documento puede ser un beneficiario, el cónyuge o quien pagó los gastos fúnebres, aunque el sujeto del caso sea el docente causante. Verifica en cambio que todos los documentos del caso pertenezcan al MISMO docente causante (misma cédula del docente o mismo nombre del fallecido en el registro de defunción). Un soporte de otro docente NO va en este caso.
+
 VERIFICACIÓN 5 — Unicidad de sujeto
 En ESCALAFON, ningún docente puede aparecer como sujeto en más de un caso.
 En IVC, ninguna institución puede aparecer como sujeto en más de un caso.
+En FONDO_PRESTACIONES, ningún docente causante puede aparecer como sujeto en más de un caso.
 
 VERIFICACIÓN 6 — Consistencia de conteo
 "cantidad_casos" debe ser igual a la longitud del array "casos".
 "total_pdfs_recibidos" debe ser igual al número real de PDFs que recibiste.
 
 VERIFICACIÓN 7 — Subtipo válido
-Para ESCALAFON e IVC, el campo "subtipo" debe estar presente y ser uno de los valores permitidos. Si no logras determinarlo con certeza, elige el más probable y anota la duda en el asunto del caso; no lo dejes en null salvo para tipo OTRO.
+Para ESCALAFON, IVC y FONDO_PRESTACIONES, el campo "subtipo" debe estar presente y ser uno de los valores permitidos. Si no logras determinarlo con certeza, elige el más probable y anota la duda en el asunto del caso; no lo dejes en null salvo para tipo OTRO.
 
 ===============================================================
 REGLAS ADICIONALES
 ===============================================================
 
 - El campo "sujeto" es OBLIGATORIO: nombre completo del docente o de la institución en MAYÚSCULAS, sin tildes.
-- El campo "identificacion" es la cédula del DOCENTE (sin puntos ni espacios) para ESCALAFON, o el NIT de la persona jurídica titular para IVC.
+- El campo "identificacion" es la cédula del DOCENTE (sin puntos ni espacios) para ESCALAFON y para FONDO_PRESTACIONES (cédula del docente causante), o el NIT de la persona jurídica titular para IVC.
 - Los "indices_documentos" incluyen TODOS los documentos del caso.
-- Dependencia posibles: GAD | IVC | COBERTURA | CALIDAD | GEFI | EXTERNO | DESCONOCIDO
+- Dependencia posibles: GAD | IVC | FONDO | COBERTURA | CALIDAD | GEFI | EXTERNO | DESCONOCIDO
 - Riesgo posible: ALTO | MEDIO | BAJO
 - Devuelve ÚNICAMENTE el JSON, sin texto adicional, sin bloques markdown.

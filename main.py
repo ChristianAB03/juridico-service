@@ -39,12 +39,13 @@ app = Flask(__name__)
 TZ_COLOMBIA = timezone(timedelta(hours=-5))
 
 # ── Versión ────────────────────────────────────────────────────
-BUILD_VERSION = "6.0"
-BUILD_DATE    = "2026-08-27"
-BUILD_FIX     = ("Modelo sin veredicto: el sistema analiza y distribuye, el abogado decide. "
-                 "Se elimino la maquinaria de deteccion de contaminacion, reintentos y fail-closed, "
-                 "que existia para forzar un veredicto que ya no se emite. La contaminacion entre "
-                 "expedientes la previene la asignacion por cedula. Modulos activos: ESCALAFON e IVC.")
+BUILD_VERSION = "6.1"
+BUILD_DATE    = "2026-09-09"
+BUILD_FIX     = ("Nuevo modulo FONDO_PRESTACIONES con cinco subtipos (pension de jubilacion, "
+                 "pension de invalidez, recurso de reposicion, seguro por muerte, auxilio por "
+                 "muerte). Exento del filtrado por cedula porque sus soportes traen identificacion "
+                 "de beneficiarios. Incluye tambien el fix de deduplicacion de casos IVC por NIT. "
+                 "Modulos activos: ESCALAFON, IVC y FONDO_PRESTACIONES.")
 
 # ── Configuración ──────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -74,22 +75,27 @@ TTL_SEGUNDOS = 300
 
 # ── Mapa de tipo → prompt ──────────────────────────────────────
 MAPA_PROMPTS = {
-    "IVC":       "ivc",
-    "ESCALAFON": "escalafon",
-    "OTRO":      "general",
+    "IVC":                "ivc",
+    "ESCALAFON":          "escalafon",
+    "FONDO_PRESTACIONES": "fondo_prestaciones",
+    "OTRO":               "general",
 }
 
 # ── Mapa de tipo → carpeta destino (sin veredicto) ─────────────
 MAPA_CARPETAS = {
-    "IVC":       "IVC_POR_REVISAR",
-    "ESCALAFON": "ESCALAFON_POR_REVISAR",
-    "OTRO":      "ADVERTENCIA",
+    "IVC":                "IVC_POR_REVISAR",
+    "ESCALAFON":          "ESCALAFON_POR_REVISAR",
+    "FONDO_PRESTACIONES": "FONDO_PRESTACIONES_POR_REVISAR",
+    "OTRO":               "ADVERTENCIA",
 }
 
-# Tipos cuyos soportes legítimos pueden llevar la identificación de un tercero
-# (en IVC el sujeto es una institución con NIT, pero los soportes traen cédulas de
-# representantes, rectores o propietarios). En ellos NO se filtra por cédula.
-TIPOS_CON_SOPORTES_DE_TERCEROS = {"IVC"}
+# Tipos cuyos soportes legítimos pueden llevar la identificación de un tercero.
+# En IVC el sujeto es una institución con NIT, pero los soportes traen cédulas de
+# representantes, rectores o propietarios. En FONDO_PRESTACIONES el sujeto es el
+# docente causante, pero los soportes de los trámites por muerte traen cédulas de
+# beneficiarios (cónyuge, hijos) o de quien sufragó los gastos fúnebres. En estos
+# tipos NO se filtra por cédula.
+TIPOS_CON_SOPORTES_DE_TERCEROS = {"IVC", "FONDO_PRESTACIONES"}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -479,7 +485,7 @@ def construir_nombre_archivo(caso: dict, tipo: str, message_id: str) -> str:
     subtipo_raw = (caso.get("subtipo") or "").strip()
     if subtipo_raw:
         s = limpiar_texto(subtipo_raw).upper()
-        s = re.sub(r'^(IVC|ESCALAFON)[_\s-]*', '', s)
+        s = re.sub(r'^(IVC|ESCALAFON|FONDO|PLANTA)[_\s-]*', '', s)
         subtipo = s.replace("_", "-").strip("- ")
 
     if sujeto and identificacion:
@@ -928,7 +934,7 @@ def version():
         "version": BUILD_VERSION, "build_date": BUILD_DATE, "fix": BUILD_FIX,
         "model": MODEL, "formato_salida": FORMATO_SALIDA, "modo_entrega": MODO_ENTREGA,
         "limite_pdfs_filtrado": LIMITE_PDFS_FILTRADO,
-        "modulos_activos": ["ESCALAFON", "IVC"], "status": "ok",
+        "modulos_activos": ["ESCALAFON", "IVC", "FONDO_PRESTACIONES"], "status": "ok",
     })
 
 
